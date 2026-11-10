@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -23,6 +24,9 @@ import br.com.raevan.treinoria.dados.remoto.dto.HabitoDiarioDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SessaoTreinoDto
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.nucleo.atualizacao.DialogoAtualizacaoApp
+import br.com.raevan.treinoria.nucleo.atualizacao.GerenciadorAtualizacaoApp
+import br.com.raevan.treinoria.nucleo.atualizacao.InfoVersaoRemota
 import br.com.raevan.treinoria.nucleo.componentes.DialogoVideoExercicioNativo
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.launch
@@ -33,6 +37,7 @@ fun TelaPainelPrincipal(
     aoAbrirPersonalHub: () -> Unit,
     aoFazerLogout: () -> Unit
 ) {
+    val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
     var carregando by remember { mutableStateOf(true) }
     var perfil by remember { mutableStateOf<PerfilDto?>(null) }
@@ -41,6 +46,14 @@ fun TelaPainelPrincipal(
     var habitoHoje by remember { mutableStateOf(HabitoDiarioDto()) }
 
     var exercicioVideoEmbutido by remember { mutableStateOf<ExercicioDto?>(null) }
+
+    // Estado da Verificação Manual de Atualização do App (OTA)
+    val (versaoInstaladaCodigo, versaoInstaladaNome) = remember {
+        GerenciadorAtualizacaoApp.obterVersaoInstalada(contexto)
+    }
+    var verificandoAtualizacao by remember { mutableStateOf(false) }
+    var infoAtualizacaoManual by remember { mutableStateOf<InfoVersaoRemota?>(null) }
+    var mensagemStatusAtualizacao by remember { mutableStateOf<String?>(null) }
 
     var exibirCheckinIa by remember { mutableStateOf(false) }
     var energiaNivel by remember { mutableStateOf(8f) }
@@ -89,6 +102,16 @@ fun TelaPainelPrincipal(
             xpTotal >= 250 -> "🥈 Prata"
             else -> "🥉 Bronze"
         }
+    }
+
+    // Modal de Atualização OTA quando encontrada manualmente
+    if (infoAtualizacaoManual != null) {
+        DialogoAtualizacaoApp(
+            infoRemota = infoAtualizacaoManual!!,
+            versaoInstaladaNome = versaoInstaladaNome,
+            versaoInstaladaCodigo = versaoInstaladaCodigo,
+            aoFechar = { infoAtualizacaoManual = null }
+        )
     }
 
     // Modal de Vídeo Nativo Dentro do Próprio App
@@ -191,58 +214,114 @@ fun TelaPainelPrincipal(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // Cabeçalho do Atleta / Personal
+        // Cabeçalho do Atleta / Personal + Botão Verificar Atualização + Logout
         item {
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = SuperficieCard,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .background(VerdeEsmeralda.copy(alpha = 0.2f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.FitnessCenter, contentDescription = null, tint = VerdeEsmeralda)
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    text = perfil?.name ?: "Atleta TreinorIA",
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 17.sp
-                                )
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (perfil?.accountRole == "trainer") CianoNeon.copy(alpha = 0.2f) else VerdeEsmeralda.copy(alpha = 0.2f)
-                                ) {
-                                    Text(
-                                        text = if (perfil?.accountRole == "trainer") "PERSONAL" else patenteAtleta,
-                                        color = if (perfil?.accountRole == "trainer") CianoNeon else VerdeEsmeraldaClaro,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Black,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(VerdeEsmeralda.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.FitnessCenter, contentDescription = null, tint = VerdeEsmeralda)
                             }
-                            Text(
-                                text = "${perfil?.goal ?: "Hipertrofia & Força"} • $xpTotal XP",
-                                fontSize = 12.sp,
-                                color = TextoSecundario
-                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(
+                                        text = perfil?.name ?: "Atleta TreinorIA",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 17.sp
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (perfil?.accountRole == "trainer") CianoNeon.copy(alpha = 0.2f) else VerdeEsmeralda.copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            text = if (perfil?.accountRole == "trainer") "PERSONAL" else patenteAtleta,
+                                            color = if (perfil?.accountRole == "trainer") CianoNeon else VerdeEsmeraldaClaro,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Black,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "${perfil?.goal ?: "Hipertrofia"} • $xpTotal XP • v$versaoInstaladaNome (#$versaoInstaladaCodigo)",
+                                    fontSize = 11.sp,
+                                    color = TextoSecundario
+                                )
+                            }
+                        }
+                        IconButton(onClick = aoFazerLogout) {
+                            Icon(Icons.Default.Logout, contentDescription = "Sair", tint = TextoSecundario)
                         }
                     }
-                    IconButton(onClick = aoFazerLogout) {
-                        Icon(Icons.Default.Logout, contentDescription = "Sair", tint = TextoSecundario)
+
+                    // Botão Visível de Verificar Atualização do App (OTA)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilledTonalButton(
+                            enabled = !verificandoAtualizacao,
+                            onClick = {
+                                verificandoAtualizacao = true
+                                mensagemStatusAtualizacao = null
+                                escopo.launch {
+                                    val disponivel = GerenciadorAtualizacaoApp.verificarAtualizacaoDisponivel(contexto)
+                                    verificandoAtualizacao = false
+                                    if (disponivel != null) {
+                                        infoAtualizacaoManual = disponivel
+                                    } else {
+                                        val remota = GerenciadorAtualizacaoApp.consultarVersaoRemota()
+                                        if (remota != null) {
+                                            mensagemStatusAtualizacao = "✅ Seu app já está na versão mais recente (v$versaoInstaladaNome • Build #$versaoInstaladaCodigo)!"
+                                        } else {
+                                            mensagemStatusAtualizacao = "⚠️ Não foi possível consultar o servidor agora. Tente novamente em instantes."
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (verificandoAtualizacao) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Verificando nova versão...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Verificar Atualização do App (v$versaoInstaladaNome)",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CianoNeon
+                                )
+                            }
+                        }
+                    }
+
+                    if (mensagemStatusAtualizacao != null) {
+                        Text(
+                            text = mensagemStatusAtualizacao!!,
+                            fontSize = 11.sp,
+                            color = VerdeEsmeraldaClaro,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
