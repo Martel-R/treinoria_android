@@ -2,8 +2,12 @@ package br.com.raevan.treinoria.apresentacao.treino
 
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -67,6 +71,10 @@ enum class FaseExecucaoTelaInteira {
     PRONTO_PROXIMA_SERIE
 }
 
+private fun formatarPeso(valor: Double): String {
+    return if (valor % 1.0 == 0.0) valor.toInt().toString() else valor.toString()
+}
+
 @Composable
 fun TelaTreinoAtivo(
     fichaSelecionada: FichaTreinoDto?,
@@ -83,6 +91,12 @@ fun TelaTreinoAtivo(
 
     // Confirmação de Descartar Treino
     var exibirConfirmacaoDescartar by remember { mutableStateOf(false) }
+
+    // Seletor Rápido por Toque (Carga ou Repetições)
+    var indiceSerieEditandoPeso by remember { mutableStateOf<Int?>(null) }
+    var indiceSerieEditandoReps by remember { mutableStateOf<Int?>(null) }
+    var aplicarEmTodasAsSeriesDoExercicio by remember { mutableStateOf(true) }
+    var valorManualModal by remember { mutableStateOf("") }
 
     // Qual exercício está com o Player de Vídeo embutido aberto dentro do card
     var exercicioComVideoAbertoId by remember { mutableStateOf<String?>(null) }
@@ -132,6 +146,234 @@ fun TelaTreinoAtivo(
             try {
                 tts?.speak(texto, TextToSpeech.QUEUE_FLUSH, null, "tts_${System.currentTimeMillis()}")
             } catch (_: Throwable) {}
+        }
+    }
+
+    // Modal Seletor Rápido de CARGA (kg) com 1 Toque
+    if (indiceSerieEditandoPeso != null) {
+        val idx = indiceSerieEditandoPeso!!
+        val serieAlvo = seriesEstado.getOrNull(idx)
+        if (serieAlvo != null) {
+            val pesosRapidos = listOf(
+                5.0, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0,
+                35.0, 40.0, 45.0, 50.0, 60.0, 70.0, 80.0, 100.0
+            )
+            val aplicarPeso = { novoPesoStr: String ->
+                if (aplicarEmTodasAsSeriesDoExercicio) {
+                    seriesEstado.indices.forEach { i ->
+                        if (seriesEstado[i].exerciseId == serieAlvo.exerciseId && !seriesEstado[i].completed) {
+                            seriesEstado[i] = seriesEstado[i].copy(weightKg = novoPesoStr)
+                        }
+                    }
+                }
+                seriesEstado[idx] = seriesEstado[idx].copy(weightKg = novoPesoStr)
+                indiceSerieEditandoPeso = null
+            }
+
+            AlertDialog(
+                onDismissRequest = { indiceSerieEditandoPeso = null },
+                title = {
+                    Column {
+                        Text("⚡ Selecionar Carga (kg)", fontWeight = FontWeight.Black, fontSize = 17.sp)
+                        Text(
+                            "${serieAlvo.exerciseName} • ${serieAlvo.setNumber}ª Série",
+                            fontSize = 12.sp,
+                            color = CianoNeon
+                        )
+                    }
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Ajuste fino rápido (-5, -2.5, +2.5, +5)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(-5.0, -2.5, +2.5, +5.0).forEach { delta ->
+                                FilledTonalButton(
+                                    onClick = {
+                                        val atual = serieAlvo.weightKg.toDoubleOrNull() ?: 20.0
+                                        val novo = (atual + delta).coerceAtLeast(0.0)
+                                        aplicarPeso(formatarPeso(novo))
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = if (delta > 0) "+${formatarPeso(delta)}" else formatarPeso(delta),
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 12.sp,
+                                        color = if (delta > 0) VerdeEsmeralda else AmbarDestaque
+                                    )
+                                }
+                            }
+                        }
+
+                        // Grade de Cargas Prontas com 1 Toque
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(4),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.height(190.dp)
+                        ) {
+                            items(pesosRapidos) { p ->
+                                val pStr = formatarPeso(p)
+                                val selecionado = serieAlvo.weightKg == pStr
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (selecionado) VerdeEsmeralda else SuperficieElevada,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { aplicarPeso(pStr) }
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(vertical = 10.dp)
+                                    ) {
+                                        Text(
+                                            text = "${pStr}kg",
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 13.sp,
+                                            color = if (selecionado) FundoAcademia else TextoPrimario
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Opção de aplicar em todas as séries restantes deste exercício
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { aplicarEmTodasAsSeriesDoExercicio = !aplicarEmTodasAsSeriesDoExercicio }
+                        ) {
+                            Checkbox(
+                                checked = aplicarEmTodasAsSeriesDoExercicio,
+                                onCheckedChange = { aplicarEmTodasAsSeriesDoExercicio = it }
+                            )
+                            Text(
+                                "Aplicar em todas as séries deste exercício",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        // Campo livre caso queira um peso específico (ex: 37.5)
+                        OutlinedTextField(
+                            value = valorManualModal,
+                            onValueChange = { valorManualModal = it },
+                            label = { Text("Ou digite outro peso (kg)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    if (valorManualModal.isNotBlank()) {
+                        Button(onClick = { aplicarPeso(valorManualModal.trim()) }) {
+                            Text("Usar ${valorManualModal}kg", fontWeight = FontWeight.Black)
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { indiceSerieEditandoPeso = null }) {
+                        Text("Fechar")
+                    }
+                }
+            )
+        }
+    }
+
+    // Modal Seletor Rápido de REPETIÇÕES com 1 Toque
+    if (indiceSerieEditandoReps != null) {
+        val idx = indiceSerieEditandoReps!!
+        val serieAlvo = seriesEstado.getOrNull(idx)
+        if (serieAlvo != null) {
+            val repsRapidas = listOf(4, 6, 8, 10, 12, 15, 18, 20, 25, 30)
+            val aplicarReps = { novasRepsStr: String ->
+                if (aplicarEmTodasAsSeriesDoExercicio) {
+                    seriesEstado.indices.forEach { i ->
+                        if (seriesEstado[i].exerciseId == serieAlvo.exerciseId && !seriesEstado[i].completed) {
+                            seriesEstado[i] = seriesEstado[i].copy(reps = novasRepsStr)
+                        }
+                    }
+                }
+                seriesEstado[idx] = seriesEstado[idx].copy(reps = novasRepsStr)
+                indiceSerieEditandoReps = null
+            }
+
+            AlertDialog(
+                onDismissRequest = { indiceSerieEditandoReps = null },
+                title = {
+                    Column {
+                        Text("⚡ Selecionar Repetições", fontWeight = FontWeight.Black, fontSize = 17.sp)
+                        Text(
+                            "${serieAlvo.exerciseName} • ${serieAlvo.setNumber}ª Série",
+                            fontSize = 12.sp,
+                            color = CianoNeon
+                        )
+                    }
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(5),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.height(110.dp)
+                        ) {
+                            items(repsRapidas) { r ->
+                                val rStr = r.toString()
+                                val selecionado = serieAlvo.reps == rStr
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (selecionado) CianoNeon else SuperficieElevada,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { aplicarReps(rStr) }
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(vertical = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = rStr,
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 15.sp,
+                                            color = if (selecionado) FundoAcademia else TextoPrimario
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { aplicarEmTodasAsSeriesDoExercicio = !aplicarEmTodasAsSeriesDoExercicio }
+                        ) {
+                            Checkbox(
+                                checked = aplicarEmTodasAsSeriesDoExercicio,
+                                onCheckedChange = { aplicarEmTodasAsSeriesDoExercicio = it }
+                            )
+                            Text(
+                                "Aplicar em todas as séries deste exercício",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { indiceSerieEditandoReps = null }) {
+                        Text("Fechar")
+                    }
+                }
+            )
         }
     }
 
@@ -196,7 +438,7 @@ fun TelaTreinoAtivo(
             val instr = item.exercise?.instructions ?: item.notes
             val qtdSeries = item.targetSets.coerceIn(1, 10)
             val repsPadrao = item.targetReps.split("-").lastOrNull()?.filter { it.isDigit() }?.ifBlank { "10" } ?: "10"
-            val pesoPadrao = if ((item.targetWeightKg ?: 0.0) > 0) item.targetWeightKg!!.toInt().toString() else "20"
+            val pesoPadrao = if ((item.targetWeightKg ?: 0.0) > 0) formatarPeso(item.targetWeightKg!!) else "20"
             for (s in 1..qtdSeries) {
                 seriesEstado.add(
                     SerieEditavel(
@@ -630,7 +872,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Lista de Exercícios e Séries do Treino do Dia
+        // Lista de Exercícios e Séries do Treino do Dia (com Controles Rápidos +/- e Seletor 1-Toque)
         seriesAgrupadas.forEach { (chave, seriesDoExercicio) ->
             val (exId, nomeExercicio) = chave
             val primeiro = seriesDoExercicio.firstOrNull()
@@ -704,88 +946,232 @@ fun TelaTreinoAtivo(
 
                         seriesDoExercicio.forEach { serie ->
                             val idxGlobal = seriesEstado.indexOf(serie)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (serie.completed) VerdeEsmeralda.copy(alpha = 0.12f) else SuperficieElevada,
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (serie.completed) VerdeEsmeralda else SuperficieElevada,
-                                    modifier = Modifier.size(32.dp)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "${serie.setNumber}ª",
-                                            fontWeight = FontWeight.Black,
-                                            fontSize = 12.sp,
-                                            color = if (serie.completed) FundoAcademia else TextoPrimario
-                                        )
+                                    // Badge do Número da Série
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (serie.completed) VerdeEsmeralda else FundoAcademia,
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = "${serie.setNumber}ª",
+                                                fontWeight = FontWeight.Black,
+                                                fontSize = 11.sp,
+                                                color = if (serie.completed) FundoAcademia else TextoPrimario
+                                            )
+                                        }
                                     }
-                                }
 
-                                OutlinedTextField(
-                                    value = serie.weightKg,
-                                    onValueChange = { novoPeso ->
-                                        if (idxGlobal >= 0) {
-                                            seriesEstado[idxGlobal] = serie.copy(weightKg = novoPeso)
-                                        }
-                                    },
-                                    label = { Text("kg", fontSize = 10.sp) },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f)
-                                )
+                                    // Controle Interativo de CARGA (kg): [-] [ 20 kg ] [+]
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = FundoAcademia,
+                                        modifier = Modifier.weight(1.15f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(SuperficieElevada)
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            val atual = serie.weightKg.toDoubleOrNull() ?: 20.0
+                                                            val novo = (atual - 2.5).coerceAtLeast(0.0)
+                                                            seriesEstado[idxGlobal] = serie.copy(weightKg = formatarPeso(novo))
+                                                        }
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("−", fontWeight = FontWeight.Black, fontSize = 16.sp, color = TextoSecundario)
+                                            }
 
-                                OutlinedTextField(
-                                    value = serie.reps,
-                                    onValueChange = { novasReps ->
-                                        if (idxGlobal >= 0) {
-                                            seriesEstado[idxGlobal] = serie.copy(reps = novasReps)
-                                        }
-                                    },
-                                    label = { Text("Reps", fontSize = 10.sp) },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f)
-                                )
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            valorManualModal = ""
+                                                            indiceSerieEditandoPeso = idxGlobal
+                                                        }
+                                                    }
+                                            ) {
+                                                Text(
+                                                    text = "${serie.weightKg} kg",
+                                                    fontWeight = FontWeight.Black,
+                                                    fontSize = 13.sp,
+                                                    color = VerdeEsmeraldaClaro
+                                                )
+                                                Text(
+                                                    text = "CARGA",
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextoSecundario
+                                                )
+                                            }
 
-                                FilledTonalButton(
-                                    onClick = {
-                                        if (idxGlobal >= 0) {
-                                            iniciarSerieEmTelaInteira(idxGlobal)
-                                        }
-                                    },
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Iniciar Repetições",
-                                        tint = VerdeEsmeralda,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(2.dp))
-                                    Text("Iniciar", fontSize = 11.sp, fontWeight = FontWeight.Black)
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        if (idxGlobal >= 0) {
-                                            val novoStatus = !serie.completed
-                                            seriesEstado[idxGlobal] = serie.copy(completed = novoStatus)
-                                            if (novoStatus) {
-                                                exercicioDescansoBarra = serie.exerciseName
-                                                descansoBarraRapida = serie.restSeconds
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(VerdeEsmeralda.copy(alpha = 0.2f))
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            val atual = serie.weightKg.toDoubleOrNull() ?: 20.0
+                                                            val novo = atual + 2.5
+                                                            seriesEstado[idxGlobal] = serie.copy(weightKg = formatarPeso(novo))
+                                                        }
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("+", fontWeight = FontWeight.Black, fontSize = 16.sp, color = VerdeEsmeralda)
                                             }
                                         }
                                     }
-                                ) {
-                                    Icon(
-                                        imageVector = if (serie.completed) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                                        contentDescription = "Marcar Série",
-                                        tint = if (serie.completed) VerdeEsmeralda else TextoSecundario,
-                                        modifier = Modifier.size(28.dp)
-                                    )
+
+                                    // Controle Interativo de REPETIÇÕES: [-] [ 10 reps ] [+]
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = FundoAcademia,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(SuperficieElevada)
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            val atual = serie.reps.toIntOrNull() ?: 10
+                                                            val novo = (atual - 1).coerceAtLeast(1)
+                                                            seriesEstado[idxGlobal] = serie.copy(reps = novo.toString())
+                                                        }
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("−", fontWeight = FontWeight.Black, fontSize = 16.sp, color = TextoSecundario)
+                                            }
+
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            indiceSerieEditandoReps = idxGlobal
+                                                        }
+                                                    }
+                                            ) {
+                                                Text(
+                                                    text = serie.reps,
+                                                    fontWeight = FontWeight.Black,
+                                                    fontSize = 14.sp,
+                                                    color = CianoNeon
+                                                )
+                                                Text(
+                                                    text = "REPS",
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextoSecundario
+                                                )
+                                            }
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(CianoNeon.copy(alpha = 0.2f))
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            val atual = serie.reps.toIntOrNull() ?: 10
+                                                            val novo = atual + 1
+                                                            seriesEstado[idxGlobal] = serie.copy(reps = novo.toString())
+                                                        }
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("+", fontWeight = FontWeight.Black, fontSize = 16.sp, color = CianoNeon)
+                                            }
+                                        }
+                                    }
+
+                                    // Botão Iniciar Série em Tela Inteira
+                                    Box(
+                                        modifier = Modifier
+                                            .height(36.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(VerdeEsmeralda)
+                                            .clickable {
+                                                if (idxGlobal >= 0) {
+                                                    iniciarSerieEmTelaInteira(idxGlobal)
+                                                }
+                                            }
+                                            .padding(horizontal = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = "Iniciar",
+                                                tint = FundoAcademia,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = "Play",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = FundoAcademia
+                                            )
+                                        }
+                                    }
+
+                                    // Checkbox rápido de concluído
+                                    IconButton(
+                                        onClick = {
+                                            if (idxGlobal >= 0) {
+                                                val novoStatus = !serie.completed
+                                                seriesEstado[idxGlobal] = serie.copy(completed = novoStatus)
+                                                if (novoStatus) {
+                                                    exercicioDescansoBarra = serie.exerciseName
+                                                    descansoBarraRapida = serie.restSeconds
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (serie.completed) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                            contentDescription = "Concluir",
+                                            tint = if (serie.completed) VerdeEsmeralda else TextoSecundario,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
