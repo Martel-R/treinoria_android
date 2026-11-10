@@ -19,6 +19,8 @@ import java.text.Normalizer
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 data class ResultadoScannerPratoIa(
     val dishName: String,
@@ -38,6 +40,14 @@ data class EstatisticaExercicioHistorico(
 
 object RepositorioTreinoria {
 
+    fun obterDataHojeIso(): String {
+        return LocalDate.now(ZoneId.systemDefault()).toString()
+    }
+
+    fun obterDataHojeFormatadaBr(): String {
+        return LocalDate.now(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd/MM"))
+    }
+
     fun obterUserIdAtual(): String? {
         return try {
             ClienteSupabase.client.auth.currentUserOrNull()?.id
@@ -53,7 +63,7 @@ object RepositorioTreinoria {
     }
 
     fun obterNomeDiaHoje(): String {
-        return when (LocalDate.now().dayOfWeek) {
+        return when (LocalDate.now(ZoneId.systemDefault()).dayOfWeek) {
             DayOfWeek.MONDAY -> "Segunda-feira"
             DayOfWeek.TUESDAY -> "Terça-feira"
             DayOfWeek.WEDNESDAY -> "Quarta-feira"
@@ -71,7 +81,7 @@ object RepositorioTreinoria {
     ): FichaTreinoDto? {
         if (fichas.isEmpty()) return null
 
-        val tokensHoje = when (LocalDate.now().dayOfWeek) {
+        val tokensHoje = when (LocalDate.now(ZoneId.systemDefault()).dayOfWeek) {
             DayOfWeek.MONDAY -> listOf("segunda", "seg")
             DayOfWeek.TUESDAY -> listOf("terca", "ter")
             DayOfWeek.WEDNESDAY -> listOf("quarta", "qua")
@@ -144,10 +154,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Carrega o histórico de séries (`workout_sets`) do usuário para mostrar
-     * "Anterior: Xkg × Y" e o Recorde Pessoal ("PR Xkg") em cada exercício.
-     */
     suspend fun obterEstatisticasExercicios(): Map<String, EstatisticaExercicioHistorico> = withContext(Dispatchers.IO) {
         val uid = obterUserIdAtual() ?: return@withContext emptyMap()
         try {
@@ -329,9 +335,13 @@ object RepositorioTreinoria {
         }
     }
 
+    /**
+     * Busca os hábitos de hidratação/creatina/pré/pós estritamente para a DATA DE HOJE
+     * no fuso horário do aparelho. Se mudou de dia, retorna um registro 100% zerado para hoje.
+     */
     suspend fun obterHabitoHoje(): HabitoDiarioDto = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext HabitoDiarioDto()
-        val hoje = LocalDate.now().toString()
+        val hoje = obterDataHojeIso()
+        val uid = obterUserIdAtual() ?: return@withContext HabitoDiarioDto(logDate = hoje)
         try {
             val lista = ClienteSupabase.client.from("daily_habits")
                 .select {
@@ -341,22 +351,49 @@ object RepositorioTreinoria {
                     }
                 }
                 .decodeList<HabitoDiarioDto>()
-            lista.firstOrNull() ?: HabitoDiarioDto(userId = uid, logDate = hoje)
+
+            val registroHoje = lista.firstOrNull { it.logDate.take(10) == hoje }
+            registroHoje ?: HabitoDiarioDto(
+                userId = uid,
+                logDate = hoje,
+                waterMl = 0,
+                waterGoalMl = 3000,
+                creatineTaken = false,
+                preWorkoutTaken = false,
+                postWorkoutTaken = false
+            )
         } catch (_: Exception) {
-            HabitoDiarioDto(userId = uid, logDate = hoje)
+            HabitoDiarioDto(
+                userId = uid,
+                logDate = hoje,
+                waterMl = 0,
+                waterGoalMl = 3000,
+                creatineTaken = false,
+                preWorkoutTaken = false,
+                postWorkoutTaken = false
+            )
         }
     }
 
-    suspend fun atualizarHabitoHoje(waterMl: Int, creatineTaken: Boolean): HabitoDiarioDto = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext HabitoDiarioDto()
-        val hoje = LocalDate.now().toString()
+    suspend fun atualizarHabitoHoje(
+        waterMl: Int,
+        creatineTaken: Boolean,
+        preWorkoutTaken: Boolean = false,
+        postWorkoutTaken: Boolean = false,
+        waterGoalMl: Int = 3000
+    ): HabitoDiarioDto = withContext(Dispatchers.IO) {
+        val hoje = obterDataHojeIso()
+        val uid = obterUserIdAtual() ?: return@withContext HabitoDiarioDto(logDate = hoje)
+        val mlLimpo = waterMl.coerceAtLeast(0)
         try {
             val payload = buildJsonObject {
                 put("user_id", uid)
                 put("log_date", hoje)
-                put("water_ml", waterMl.coerceAtLeast(0))
-                put("water_goal_ml", 3000)
+                put("water_ml", mlLimpo)
+                put("water_goal_ml", waterGoalMl.coerceAtLeast(1000))
                 put("creatine_taken", creatineTaken)
+                put("pre_workout_taken", preWorkoutTaken)
+                put("post_workout_taken", postWorkoutTaken)
             }
             ClienteSupabase.client.from("daily_habits")
                 .upsert(payload) {
@@ -365,7 +402,15 @@ object RepositorioTreinoria {
                 }
                 .decodeSingle<HabitoDiarioDto>()
         } catch (_: Exception) {
-            HabitoDiarioDto(userId = uid, logDate = hoje, waterMl = waterMl, creatineTaken = creatineTaken)
+            HabitoDiarioDto(
+                userId = uid,
+                logDate = hoje,
+                waterMl = mlLimpo,
+                waterGoalMl = waterGoalMl,
+                creatineTaken = creatineTaken,
+                preWorkoutTaken = preWorkoutTaken,
+                postWorkoutTaken = postWorkoutTaken
+            )
         }
     }
 
@@ -537,7 +582,7 @@ object RepositorioTreinoria {
         try {
             val payload = buildJsonObject {
                 put("user_id", uid)
-                put("measured_at", LocalDate.now().toString())
+                put("measured_at", obterDataHojeIso())
                 if (pesoKg != null) put("weight_kg", pesoKg)
                 if (bfPct != null) put("body_fat_pct", bfPct)
                 if (peitoCm != null) put("chest_cm", peitoCm)

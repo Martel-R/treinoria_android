@@ -20,6 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.HabitoDiarioDto
@@ -33,6 +36,7 @@ import br.com.raevan.treinoria.nucleo.componentes.DialogoVideoExercicioNativo
 import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import br.com.raevan.treinoria.nucleo.saude.ResumoSaudeDiaria
 import br.com.raevan.treinoria.nucleo.tema.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -42,14 +46,19 @@ fun TelaPainelPrincipal(
     aoFazerLogout: () -> Unit
 ) {
     val contexto = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val escopo = rememberCoroutineScope()
+
     var carregando by remember { mutableStateOf(true) }
     var perfil by remember { mutableStateOf<PerfilDto?>(null) }
     var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(emptyList()) }
-    var habitoHoje by remember { mutableStateOf(HabitoDiarioDto()) }
+    var dataReferenciaHoje by remember { mutableStateOf(RepositorioTreinoria.obterDataHojeIso()) }
+    var habitoHoje by remember {
+        mutableStateOf(HabitoDiarioDto(logDate = RepositorioTreinoria.obterDataHojeIso()))
+    }
 
-    // Estado do Android Health Connect (Google Fit / Samsung Health / Smartwatches)
+    // Estado do Android Health Connect
     var resumoSaude by remember { mutableStateOf(ResumoSaudeDiaria()) }
     var sincronizandoSaude by remember { mutableStateOf(false) }
 
@@ -81,7 +90,6 @@ fun TelaPainelPrincipal(
         }
     }
 
-    // Launcher oficial do Health Connect para pedir permissões de Saúde
     val permissoesSaudeLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { _ ->
@@ -92,6 +100,7 @@ fun TelaPainelPrincipal(
         escopo.launch {
             carregando = true
             try {
+                dataReferenciaHoje = RepositorioTreinoria.obterDataHojeIso()
                 RepositorioTreinoria.garantirDadosIniciaisUsuario()
                 perfil = RepositorioTreinoria.carregarPerfil()
                 fichas = RepositorioTreinoria.listarFichasTreino()
@@ -107,14 +116,58 @@ fun TelaPainelPrincipal(
         }
     }
 
-    LaunchedEffect(Unit) {
-        recarregarDados()
+    // Sempre que o usuário volta para o app (ON_RESUME) ou vira meia-noite, verifica se o dia mudou e reseta automaticamente!
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val hojeAgora = RepositorioTreinoria.obterDataHojeIso()
+                if (habitoHoje.logDate.take(10) != hojeAgora) {
+                    habitoHoje = HabitoDiarioDto(logDate = hojeAgora)
+                }
+                recarregarDados()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
-    val treinoDoDia = remember(fichas, sessoes) {
+    // Vigilante de virada de dia (00:00) com o app aberto
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            val hojeAgora = RepositorioTreinoria.obterDataHojeIso()
+            if (hojeAgora != dataReferenciaHoje || habitoHoje.logDate.take(10) != hojeAgora) {
+                dataReferenciaHoje = hojeAgora
+                habitoHoje = RepositorioTreinoria.obterHabitoHoje()
+            }
+        }
+    }
+
+    val salvarHabitoDoDia = { novaAgua: Int, novaCreatina: Boolean, novoPre: Boolean, novoPos: Boolean ->
+        escopo.launch {
+            val hojeIso = RepositorioTreinoria.obterDataHojeIso()
+            val baseZeradaSeMudouDia = if (habitoHoje.logDate.take(10) == hojeIso) {
+                novaAgua.coerceAtLeast(0)
+            } else {
+                novaAgua.coerceAtLeast(0)
+            }
+            habitoHoje = RepositorioTreinoria.atualizarHabitoHoje(
+                waterMl = baseZeradaSeMudouDia,
+                creatineTaken = novaCreatina,
+                preWorkoutTaken = novoPre,
+                postWorkoutTaken = novoPos,
+                waterGoalMl = habitoHoje.waterGoalMl.takeIf { it > 0 } ?: 3000
+            )
+        }
+    }
+
+    val treinoDoDia = remember(fichas, sessoes, dataReferenciaHoje) {
         RepositorioTreinoria.selecionarTreinoDoDia(fichas, sessoes)
     }
-    val nomeDiaHoje = remember { RepositorioTreinoria.obterNomeDiaHoje() }
+    val nomeDiaHoje = remember(dataReferenciaHoje) { RepositorioTreinoria.obterNomeDiaHoje() }
+    val dataHojeBr = remember(dataReferenciaHoje) { RepositorioTreinoria.obterDataHojeFormatadaBr() }
 
     val volumeTotalAcumulado = remember(sessoes) {
         sessoes.sumOf { it.totalVolumeKg }.toInt()
@@ -301,7 +354,6 @@ fun TelaPainelPrincipal(
                         }
                     }
 
-                    // Botão Visível de Verificar Atualização do App (OTA)
                     FilledTonalButton(
                         enabled = !verificandoAtualizacao,
                         onClick = {
@@ -720,7 +772,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Widget Diário de Hidratação (Água) + Creatina (Grava automaticamente no Health Connect!)
+        // Widget Diário Completo de Hidratação + Creatina + Pré-Treino + Pós-Treino (Reseta Diariamente às 00:00!)
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -733,14 +785,21 @@ fun TelaPainelPrincipal(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.WaterDrop, contentDescription = null, tint = CianoNeon)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                "Hidratação & Creatina Hoje",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
+                            Column {
+                                Text(
+                                    "Hidratação & Suplementos Hoje ($dataHojeBr)",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    "Zera automaticamente todo dia às 00:00",
+                                    fontSize = 10.sp,
+                                    color = TextoSecundario
+                                )
+                            }
                         }
                         Text(
                             "${habitoHoje.waterMl} / ${habitoHoje.waterGoalMl} ml",
@@ -758,55 +817,136 @@ fun TelaPainelPrincipal(
                         color = CianoNeon
                     )
 
+                    // Botões de Água: [-250ml] [+250ml] [+500ml] [Zerar]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        FilledTonalButton(
+                        OutlinedButton(
                             onClick = {
-                                escopo.launch {
-                                    habitoHoje = RepositorioTreinoria.atualizarHabitoHoje(
-                                        habitoHoje.waterMl + 250,
-                                        habitoHoje.creatineTaken
-                                    )
-                                    GerenciadorHealthConnect.gravarAguaIngerida(contexto, 250)
-                                }
+                                salvarHabitoDoDia(
+                                    (habitoHoje.waterMl - 250).coerceAtLeast(0),
+                                    habitoHoje.creatineTaken,
+                                    habitoHoje.preWorkoutTaken,
+                                    habitoHoje.postWorkoutTaken
+                                )
                             },
-                            modifier = Modifier.weight(1f)
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(0.85f)
                         ) {
-                            Text("+250ml 💧", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("−250ml", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         FilledTonalButton(
                             onClick = {
-                                escopo.launch {
-                                    habitoHoje = RepositorioTreinoria.atualizarHabitoHoje(
-                                        habitoHoje.waterMl + 500,
-                                        habitoHoje.creatineTaken
-                                    )
-                                    GerenciadorHealthConnect.gravarAguaIngerida(contexto, 500)
-                                }
+                                salvarHabitoDoDia(
+                                    habitoHoje.waterMl + 250,
+                                    habitoHoje.creatineTaken,
+                                    habitoHoje.preWorkoutTaken,
+                                    habitoHoje.postWorkoutTaken
+                                )
+                                escopo.launch { GerenciadorHealthConnect.gravarAguaIngerida(contexto, 250) }
                             },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("+500ml 💧", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("+250ml 💧", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
+                        FilledTonalButton(
+                            onClick = {
+                                salvarHabitoDoDia(
+                                    habitoHoje.waterMl + 500,
+                                    habitoHoje.creatineTaken,
+                                    habitoHoje.preWorkoutTaken,
+                                    habitoHoje.postWorkoutTaken
+                                )
+                                escopo.launch { GerenciadorHealthConnect.gravarAguaIngerida(contexto, 500) }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("+500ml 💧", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        if (habitoHoje.waterMl > 0) {
+                            TextButton(
+                                onClick = {
+                                    salvarHabitoDoDia(
+                                        0,
+                                        habitoHoje.creatineTaken,
+                                        habitoHoje.preWorkoutTaken,
+                                        habitoHoje.postWorkoutTaken
+                                    )
+                                },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) {
+                                Text("Zerar", fontSize = 11.sp, color = VermelhoAlerta, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    // Checklist Diário: Creatina + Refeição Pré + Pós-Treino/Whey (Todos resetam diariamente!)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         FilterChip(
                             selected = habitoHoje.creatineTaken,
                             onClick = {
-                                escopo.launch {
-                                    habitoHoje = RepositorioTreinoria.atualizarHabitoHoje(
-                                        habitoHoje.waterMl,
-                                        !habitoHoje.creatineTaken
-                                    )
-                                }
+                                salvarHabitoDoDia(
+                                    habitoHoje.waterMl,
+                                    !habitoHoje.creatineTaken,
+                                    habitoHoje.preWorkoutTaken,
+                                    habitoHoje.postWorkoutTaken
+                                )
                             },
                             label = {
                                 Text(
-                                    if (habitoHoje.creatineTaken) "Creatina OK ✅" else "Creatina 5g",
+                                    if (habitoHoje.creatineTaken) "Creatina ✅" else "⚡ Creatina",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
-                            }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        FilterChip(
+                            selected = habitoHoje.preWorkoutTaken,
+                            onClick = {
+                                salvarHabitoDoDia(
+                                    habitoHoje.waterMl,
+                                    habitoHoje.creatineTaken,
+                                    !habitoHoje.preWorkoutTaken,
+                                    habitoHoje.postWorkoutTaken
+                                )
+                            },
+                            label = {
+                                Text(
+                                    if (habitoHoje.preWorkoutTaken) "Pré-Treino ✅" else "🍌 Pré-Treino",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        FilterChip(
+                            selected = habitoHoje.postWorkoutTaken,
+                            onClick = {
+                                salvarHabitoDoDia(
+                                    habitoHoje.waterMl,
+                                    habitoHoje.creatineTaken,
+                                    habitoHoje.preWorkoutTaken,
+                                    !habitoHoje.postWorkoutTaken
+                                )
+                            },
+                            label = {
+                                Text(
+                                    if (habitoHoje.postWorkoutTaken) "Pós/Whey ✅" else "🥤 Pós/Whey",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
