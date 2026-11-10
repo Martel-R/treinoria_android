@@ -2,6 +2,9 @@ package br.com.raevan.treinoria.apresentacao.navegacao
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -23,6 +26,7 @@ import br.com.raevan.treinoria.apresentacao.personal.TelaPersonalEConstrutor
 import br.com.raevan.treinoria.apresentacao.treino.TelaTreinoAtivo
 import br.com.raevan.treinoria.dados.rede.ClienteSupabase
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
+import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
 import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
 import br.com.raevan.treinoria.nucleo.atualizacao.DialogoAtualizacaoApp
 import br.com.raevan.treinoria.nucleo.atualizacao.GerenciadorAtualizacaoApp
@@ -43,6 +47,20 @@ fun EstruturaNavegacaoPrincipal() {
     }
     var infoAtualizacaoPendente by remember { mutableStateOf<InfoVersaoRemota?>(null) }
     var fichaAtivaSelecionada by remember { mutableStateOf<FichaTreinoDto?>(null) }
+    var roleUsuario by remember {
+        mutableStateOf(
+            try { GerenciadorSessao.obterInstancia().obterRoleUsuario() } catch (_: Exception) { "athlete" }
+        )
+    }
+
+    LaunchedEffect(rotaAtual) {
+        try {
+            val p = RepositorioTreinoria.carregarPerfil()
+            if (p != null) {
+                roleUsuario = p.accountRole
+            }
+        } catch (_: Throwable) {}
+    }
 
     LaunchedEffect(Unit) {
         try {
@@ -86,6 +104,8 @@ fun EstruturaNavegacaoPrincipal() {
         else -> DestinoNavegacao.Login.rota
     }
 
+    val ehPersonal = roleUsuario.lowercase() in listOf("trainer", "gym", "admin")
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
@@ -95,6 +115,17 @@ fun EstruturaNavegacaoPrincipal() {
                 ) {
                     DestinoNavegacao.itensBarraInferior.forEach { destino ->
                         val estaSelecionado = rotaAtual == destino.rota
+                        val tituloAba = if (destino == DestinoNavegacao.PersonalHub) {
+                            if (ehPersonal) "Personal" else "Fichas"
+                        } else {
+                            destino.titulo
+                        }
+                        val iconeAba = if (destino == DestinoNavegacao.PersonalHub) {
+                            if (ehPersonal) Icons.Default.Groups else Icons.Default.Assignment
+                        } else {
+                            destino.icone
+                        }
+
                         NavigationBarItem(
                             selected = estaSelecionado,
                             onClick = {
@@ -110,13 +141,13 @@ fun EstruturaNavegacaoPrincipal() {
                             },
                             icon = {
                                 Icon(
-                                    imageVector = destino.icone,
-                                    contentDescription = destino.titulo
+                                    imageVector = iconeAba,
+                                    contentDescription = tituloAba
                                 )
                             },
                             label = {
                                 Text(
-                                    text = destino.titulo,
+                                    text = tituloAba,
                                     fontSize = 10.sp,
                                     fontWeight = if (estaSelecionado) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1

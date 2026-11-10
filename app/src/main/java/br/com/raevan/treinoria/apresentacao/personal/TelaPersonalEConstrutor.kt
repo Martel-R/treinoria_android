@@ -18,8 +18,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
+import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.VinculoAlunoPersonalDto
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.launch
 
@@ -27,11 +29,20 @@ import kotlinx.coroutines.launch
 fun TelaPersonalEConstrutor() {
     val escopo = rememberCoroutineScope()
 
-    var abaSelecionada by remember { mutableStateOf(0) } // 0 = Minhas Fichas & Construtor, 1 = Meus Alunos (Personal)
+    var perfil by remember { mutableStateOf<PerfilDto?>(null) }
+    var abaSelecionada by remember { mutableStateOf(0) } // 0 = Minhas Fichas & Construtor, 1 = Carteira Personal (apenas para trainer/gym/admin)
     var alunos by remember { mutableStateOf<List<VinculoAlunoPersonalDto>>(emptyList()) }
     var minhasFichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(emptyList()) }
     var carregando by remember { mutableStateOf(true) }
+
+    val roleSalvoLocal = remember {
+        try { GerenciadorSessao.obterInstancia().obterRoleUsuario() } catch (_: Exception) { "athlete" }
+    }
+    val ehPersonalOuAcademia = remember(perfil, roleSalvoLocal) {
+        val role = (perfil?.accountRole ?: roleSalvoLocal).lowercase()
+        role == "trainer" || role == "gym" || role == "admin"
+    }
 
     // Modal Criar Nova Ficha (Para Mim ou Para Aluno)
     var exibirModalNovaFicha by remember { mutableStateOf(false) }
@@ -55,8 +66,15 @@ fun TelaPersonalEConstrutor() {
         escopo.launch {
             carregando = true
             RepositorioTreinoria.garantirDadosIniciaisUsuario()
+            perfil = RepositorioTreinoria.carregarPerfil()
             minhasFichas = RepositorioTreinoria.listarFichasTreino()
-            alunos = RepositorioTreinoria.listarAlunosPersonal()
+            val roleAtual = (perfil?.accountRole ?: roleSalvoLocal).lowercase()
+            if (roleAtual == "trainer" || roleAtual == "gym" || roleAtual == "admin") {
+                alunos = RepositorioTreinoria.listarAlunosPersonal()
+            } else {
+                abaSelecionada = 0
+                alunos = emptyList()
+            }
             if (catalogoExercicios.isEmpty()) {
                 catalogoExercicios = RepositorioTreinoria.listarExercicios()
             }
@@ -68,7 +86,7 @@ fun TelaPersonalEConstrutor() {
         recarregar()
     }
 
-    if (exibirModalNovoAluno) {
+    if (exibirModalNovoAluno && ehPersonalOuAcademia) {
         AlertDialog(
             onDismissRequest = { exibirModalNovoAluno = false },
             title = { Text("➕ Cadastrar Aluno na Consultoria", fontWeight = FontWeight.Black) },
@@ -294,22 +312,35 @@ fun TelaPersonalEConstrutor() {
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = abaSelecionada == 0,
-                    onClick = { abaSelecionada = 0 },
-                    label = { Text("📋 Minhas Fichas (${minhasFichas.size})", fontWeight = FontWeight.Bold) },
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = abaSelecionada == 1,
-                    onClick = { abaSelecionada = 1 },
-                    label = { Text("👥 Carteira Personal (${alunos.size})", fontWeight = FontWeight.Bold) },
-                    modifier = Modifier.weight(1f)
+        // Se for Personal Trainer, mostra a chave entre Minhas Fichas e Carteira Personal.
+        // Se for Aluno / Assinante Comum, NÃO mostra a aba de Carteira Personal!
+        if (ehPersonalOuAcademia) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = abaSelecionada == 0,
+                        onClick = { abaSelecionada = 0 },
+                        label = { Text("📋 Minhas Fichas (${minhasFichas.size})", fontWeight = FontWeight.Bold) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = abaSelecionada == 1,
+                        onClick = { abaSelecionada = 1 },
+                        label = { Text("👥 Carteira Personal (${alunos.size})", fontWeight = FontWeight.Bold) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        } else {
+            item {
+                Text(
+                    text = "📋 Minhas Fichas de Treino (${minhasFichas.size})",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 18.sp,
+                    color = VerdeEsmeralda
                 )
             }
         }
@@ -332,7 +363,7 @@ fun TelaPersonalEConstrutor() {
             }
         }
 
-        if (abaSelecionada == 0) {
+        if (abaSelecionada == 0 || !ehPersonalOuAcademia) {
             item {
                 Button(
                     onClick = {
@@ -361,7 +392,7 @@ fun TelaPersonalEConstrutor() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(ficha.name, fontWeight = FontWeight.Black, fontSize = 15.sp, color = VerdeEsmeralda)
                                 Text(
-                                    "${ficha.description ?: "Hipertrofia"} • ${ficha.items.size} exercícios",
+                                    "${ficha.description ?: "Hipertrofia"} • ${ficha.dayOfWeek ?: "Livre"} • ${ficha.items.size} exercícios",
                                     fontSize = 12.sp,
                                     color = TextoSecundario
                                 )
@@ -391,8 +422,8 @@ fun TelaPersonalEConstrutor() {
                     }
                 }
             }
-        } else {
-            // Aba 1: Carteira Multi-Alunos do Personal Trainer
+        } else if (ehPersonalOuAcademia) {
+            // Aba 1: Carteira Multi-Alunos exclusiva do Personal Trainer
             item {
                 Button(
                     onClick = { exibirModalNovoAluno = true },

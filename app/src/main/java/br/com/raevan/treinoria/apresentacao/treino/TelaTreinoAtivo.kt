@@ -81,6 +81,9 @@ fun TelaTreinoAtivo(
     var segundosTreino by remember { mutableStateOf(0) }
     var treinoEmAndamento by remember { mutableStateOf(true) }
 
+    // Confirmação de Descartar Treino
+    var exibirConfirmacaoDescartar by remember { mutableStateOf(false) }
+
     // Qual exercício está com o Player de Vídeo embutido aberto dentro do card
     var exercicioComVideoAbertoId by remember { mutableStateOf<String?>(null) }
 
@@ -132,7 +135,43 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Carrega automaticamente APENAS o Treino do Dia (se nenhuma ficha específica foi clicada)
+    // Modal de confirmação para Descartar Treino em andamento
+    if (exibirConfirmacaoDescartar) {
+        AlertDialog(
+            onDismissRequest = { exibirConfirmacaoDescartar = false },
+            title = { Text("Descartar Treino?", fontWeight = FontWeight.Black) },
+            text = {
+                Text(
+                    "Deseja realmente descartar este treino em andamento? As séries marcadas agora serão zeradas e não serão salvas no histórico.",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        exibirConfirmacaoDescartar = false
+                        indiceSerieTelaInteira = null
+                        descansoBarraRapida = 0
+                        segundosTreino = 0
+                        seriesEstado.indices.forEach { i ->
+                            seriesEstado[i] = seriesEstado[i].copy(completed = false)
+                        }
+                        aoConcluirTreino()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = VermelhoAlerta)
+                ) {
+                    Text("Sim, Descartar Treino", fontWeight = FontWeight.Black)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { exibirConfirmacaoDescartar = false }) {
+                    Text("Continuar Treinando")
+                }
+            }
+        )
+    }
+
+    // Carrega automaticamente APENAS o Treino do Dia
     LaunchedEffect(Unit) {
         RepositorioTreinoria.garantirDadosIniciaisUsuario()
         perfil = RepositorioTreinoria.carregarPerfil()
@@ -226,7 +265,6 @@ fun TelaTreinoAtivo(
                 if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
                 repAtualTelaInteira = rep
 
-                // Excêntrica (Descida)
                 falar("Desce")
                 for (seg in 1..presetCadencia.eccentric) {
                     if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
@@ -234,7 +272,6 @@ fun TelaTreinoAtivo(
                     delay(1000)
                 }
 
-                // Pausa Isométrica
                 if (presetCadencia.pause > 0) {
                     falar("Segura")
                     for (seg in 1..presetCadencia.pause) {
@@ -244,7 +281,6 @@ fun TelaTreinoAtivo(
                     }
                 }
 
-                // Concêntrica (Subida)
                 falar("Sobe $rep")
                 for (seg in 1..presetCadencia.concentric.coerceAtLeast(1)) {
                     if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
@@ -253,7 +289,6 @@ fun TelaTreinoAtivo(
                 }
             }
 
-            // Concluiu todas as repetições -> Marca série e inicia o Descanso na mesma tela
             if (idx in seriesEstado.indices) {
                 seriesEstado[idx] = seriesEstado[idx].copy(completed = true)
             }
@@ -303,7 +338,6 @@ fun TelaTreinoAtivo(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Topo Minimalista: Apenas nome do exercício, série e botão discreto de fechar (X)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -332,7 +366,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Centro Focado e Gigante (Sem poluição visual)
                         when (faseTelaInteira) {
                             FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
                                 Column(
@@ -444,7 +477,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Rodapé Minimalista: APENAS 1 botão principal de ação!
                         Box(modifier = Modifier.fillMaxWidth()) {
                             when (faseTelaInteira) {
                                 FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
@@ -522,7 +554,7 @@ fun TelaTreinoAtivo(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // Cabeçalho Limpo: Mostra APENAS o Treino do Dia
+        // Cabeçalho Limpo: Mostra APENAS o Treino do Dia + Botão Descartar
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -545,7 +577,7 @@ fun TelaTreinoAtivo(
                             Text(
                                 text = fichaAtual?.name ?: "Carregando Treino do Dia...",
                                 fontWeight = FontWeight.Black,
-                                fontSize = 19.sp,
+                                fontSize = 18.sp,
                                 color = VerdeEsmeralda
                             )
                             Text(
@@ -554,12 +586,22 @@ fun TelaTreinoAtivo(
                                 color = TextoSecundario
                             )
                         }
-                        IconButton(onClick = { vozAtiva = !vozAtiva }) {
-                            Icon(
-                                imageVector = if (vozAtiva) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                                contentDescription = "Voz",
-                                tint = if (vozAtiva) VerdeEsmeralda else TextoSecundario
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { vozAtiva = !vozAtiva }) {
+                                Icon(
+                                    imageVector = if (vozAtiva) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                                    contentDescription = "Voz",
+                                    tint = if (vozAtiva) VerdeEsmeralda else TextoSecundario
+                                )
+                            }
+                            TextButton(
+                                onClick = { exibirConfirmacaoDescartar = true },
+                                colors = ButtonDefaults.textButtonColors(contentColor = VermelhoAlerta)
+                            ) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Descartar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
 
@@ -708,7 +750,6 @@ fun TelaTreinoAtivo(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                // Botão Iniciar Repetição em Tela Inteira Minimalista!
                                 FilledTonalButton(
                                     onClick = {
                                         if (idxGlobal >= 0) {
@@ -753,7 +794,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Finalizar Treino do Dia
+        // Finalizar ou Descartar Treino do Dia
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -761,7 +802,7 @@ fun TelaTreinoAtivo(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Finalizar Treino do Dia", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    Text("Finalizar ou Descartar Treino", fontWeight = FontWeight.Black, fontSize = 16.sp)
 
                     OutlinedTextField(
                         value = notasSessao,
@@ -825,8 +866,19 @@ fun TelaTreinoAtivo(
                         } else {
                             Icon(Icons.Default.Check, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Concluir Treino do Dia", fontWeight = FontWeight.Black)
+                            Text("Concluir & Salvar Treino", fontWeight = FontWeight.Black)
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = { exibirConfirmacaoDescartar = true },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VermelhoAlerta),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Default.DeleteOutline, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Descartar Treino em Andamento", fontWeight = FontWeight.Bold)
                     }
                 }
             }

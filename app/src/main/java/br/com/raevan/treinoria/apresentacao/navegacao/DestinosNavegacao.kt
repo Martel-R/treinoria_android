@@ -14,7 +14,7 @@ sealed class DestinoNavegacao(
     object Painel : DestinoNavegacao("painel", "Início", Icons.Default.Home)
     object TreinoAtivo : DestinoNavegacao("treino_ativo", "Treinar", Icons.Default.FitnessCenter)
     object NutricaoEvolucao : DestinoNavegacao("nutricao_evolucao", "Nutri & Corpo", Icons.Default.Restaurant)
-    object PersonalHub : DestinoNavegacao("personal_hub", "Personal & Fichas", Icons.Default.Groups)
+    object PersonalHub : DestinoNavegacao("personal_hub", "Fichas", Icons.Default.Assignment)
 
     companion object {
         val itensBarraInferior = listOf(
