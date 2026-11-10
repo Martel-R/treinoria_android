@@ -17,11 +17,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.HabitoDiarioDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SessaoTreinoDto
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.nucleo.componentes.DialogoVideoExercicioNativo
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.launch
 
@@ -37,6 +39,8 @@ fun TelaPainelPrincipal(
     var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(emptyList()) }
     var habitoHoje by remember { mutableStateOf(HabitoDiarioDto()) }
+
+    var exercicioVideoEmbutido by remember { mutableStateOf<ExercicioDto?>(null) }
 
     var exibirCheckinIa by remember { mutableStateOf(false) }
     var energiaNivel by remember { mutableStateOf(8f) }
@@ -64,7 +68,6 @@ fun TelaPainelPrincipal(
         recarregarDados()
     }
 
-    // Seleciona apenas o TREINO DO DIA (não mostra os três)
     val treinoDoDia = remember(fichas, sessoes) {
         RepositorioTreinoria.selecionarTreinoDoDia(fichas, sessoes)
     }
@@ -86,6 +89,18 @@ fun TelaPainelPrincipal(
             xpTotal >= 250 -> "🥈 Prata"
             else -> "🥉 Bronze"
         }
+    }
+
+    // Modal de Vídeo Nativo Dentro do Próprio App
+    if (exercicioVideoEmbutido != null && !exercicioVideoEmbutido?.videoUrl.isNullOrBlank()) {
+        val ex = exercicioVideoEmbutido!!
+        DialogoVideoExercicioNativo(
+            tituloExercicio = ex.name,
+            grupoMuscular = ex.muscleGroup,
+            videoUrl = ex.videoUrl!!,
+            instrucoes = ex.instructions,
+            aoFechar = { exercicioVideoEmbutido = null }
+        )
     }
 
     if (exibirCheckinIa) {
@@ -343,29 +358,23 @@ fun TelaPainelPrincipal(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                treinoDoDia.name,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 18.sp,
+                                color = VerdeEsmeraldaClaro
+                            )
+                            if (!treinoDoDia.description.isNullOrBlank()) {
+                                Text(treinoDoDia.description, fontSize = 12.sp, color = TextoSecundario)
+                            }
+                            if (!treinoDoDia.dayOfWeek.isNullOrBlank()) {
                                 Text(
-                                    treinoDoDia.name,
-                                    fontWeight = FontWeight.Black,
-                                    fontSize = 18.sp,
-                                    color = VerdeEsmeraldaClaro
+                                    "📅 Programado: ${treinoDoDia.dayOfWeek}",
+                                    fontSize = 11.sp,
+                                    color = CianoNeon,
+                                    fontWeight = FontWeight.Bold
                                 )
-                                if (!treinoDoDia.description.isNullOrBlank()) {
-                                    Text(treinoDoDia.description, fontSize = 12.sp, color = TextoSecundario)
-                                }
-                                if (!treinoDoDia.dayOfWeek.isNullOrBlank()) {
-                                    Text(
-                                        "📅 Programado: ${treinoDoDia.dayOfWeek}",
-                                        fontSize = 11.sp,
-                                        color = CianoNeon,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
                             }
                         }
 
@@ -373,15 +382,34 @@ fun TelaPainelPrincipal(
                             HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
                             treinoDoDia.items.forEach { item ->
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !item.exercise?.videoUrl.isNullOrBlank()) {
+                                            exercicioVideoEmbutido = item.exercise
+                                        }
+                                        .padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "• ${item.exercise?.name ?: "Exercício"}",
-                                        fontSize = 13.sp,
-                                        color = TextoPrimario,
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.weight(1f)
-                                    )
+                                    ) {
+                                        if (!item.exercise?.videoUrl.isNullOrBlank()) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayCircle,
+                                                contentDescription = "Assistir vídeo no app",
+                                                tint = VerdeEsmeralda,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                        }
+                                        Text(
+                                            text = item.exercise?.name ?: "Exercício",
+                                            fontSize = 13.sp,
+                                            color = TextoPrimario
+                                        )
+                                    }
                                     val pesoTxt = if ((item.targetWeightKg ?: 0.0) > 0) " (${item.targetWeightKg!!.toInt()}kg)" else ""
                                     Text(
                                         text = "${item.targetSets}x ${item.targetReps}$pesoTxt",

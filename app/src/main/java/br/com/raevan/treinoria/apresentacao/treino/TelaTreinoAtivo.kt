@@ -1,7 +1,5 @@
 package br.com.raevan.treinoria.apresentacao.treino
 
-import android.content.Intent
-import android.net.Uri
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -28,6 +26,7 @@ import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SerieSessaoDto
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.nucleo.componentes.PlayerVideoNativoCard
 import br.com.raevan.treinoria.nucleo.notificacoes.GerenciadorNotificacoes
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.delay
@@ -53,6 +52,7 @@ data class SerieEditavel(
     val exerciseName: String,
     val muscleGroup: String,
     val videoUrl: String?,
+    val instructions: String?,
     val setNumber: Int,
     val totalSetsForExercise: Int,
     var weightKg: String,
@@ -80,6 +80,9 @@ fun TelaTreinoAtivo(
 
     var segundosTreino by remember { mutableStateOf(0) }
     var treinoEmAndamento by remember { mutableStateOf(true) }
+
+    // Qual exercício está com o Player de Vídeo embutido aberto dentro do card
+    var exercicioComVideoAbertoId by remember { mutableStateOf<String?>(null) }
 
     // Configuração de Cadência / Metrônomo
     var presetCadencia by remember { mutableStateOf(CADENCE_PRESETS_ANDROID.first()) }
@@ -151,6 +154,7 @@ fun TelaTreinoAtivo(
             val nomeEx = item.exercise?.name ?: "Exercício"
             val grupoMusc = item.exercise?.muscleGroup ?: "Musculação"
             val vid = item.exercise?.videoUrl
+            val instr = item.exercise?.instructions ?: item.notes
             val qtdSeries = item.targetSets.coerceIn(1, 10)
             val repsPadrao = item.targetReps.split("-").lastOrNull()?.filter { it.isDigit() }?.ifBlank { "10" } ?: "10"
             val pesoPadrao = if ((item.targetWeightKg ?: 0.0) > 0) item.targetWeightKg!!.toInt().toString() else "20"
@@ -161,6 +165,7 @@ fun TelaTreinoAtivo(
                         exerciseName = nomeEx,
                         muscleGroup = grupoMusc,
                         videoUrl = vid,
+                        instructions = instr,
                         setNumber = s,
                         totalSetsForExercise = qtdSeries,
                         weightKg = pesoPadrao,
@@ -517,7 +522,7 @@ fun TelaTreinoAtivo(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // Cabeçalho Limpo: Mostra APENAS o Treino do Dia (sem botões das 3 fichas)
+        // Cabeçalho Limpo: Mostra APENAS o Treino do Dia
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -585,11 +590,14 @@ fun TelaTreinoAtivo(
 
         // Lista de Exercícios e Séries do Treino do Dia
         seriesAgrupadas.forEach { (chave, seriesDoExercicio) ->
-            val (_, nomeExercicio) = chave
-            val videoUrl = seriesDoExercicio.firstOrNull()?.videoUrl
-            val grupoMuscular = seriesDoExercicio.firstOrNull()?.muscleGroup ?: ""
+            val (exId, nomeExercicio) = chave
+            val primeiro = seriesDoExercicio.firstOrNull()
+            val videoUrl = primeiro?.videoUrl
+            val grupoMuscular = primeiro?.muscleGroup ?: ""
+            val instrucoes = primeiro?.instructions
+            val videoAbertoNesteCard = exercicioComVideoAbertoId == exId
 
-            item {
+            item(key = exId) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = SuperficieCard,
@@ -618,19 +626,38 @@ fun TelaTreinoAtivo(
                                 )
                             }
                             if (!videoUrl.isNullOrBlank()) {
-                                TextButton(
+                                FilledTonalButton(
                                     onClick = {
-                                        try {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(videoUrl))
-                                            contexto.startActivity(intent)
-                                        } catch (_: Exception) {}
-                                    }
+                                        exercicioComVideoAbertoId = if (videoAbertoNesteCard) null else exId
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                                 ) {
-                                    Icon(Icons.Default.PlayCircle, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
+                                    Icon(
+                                        imageVector = if (videoAbertoNesteCard) Icons.Default.Close else Icons.Default.PlayCircle,
+                                        contentDescription = null,
+                                        tint = CianoNeon,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Vídeo", color = CianoNeon, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = if (videoAbertoNesteCard) "Fechar Vídeo" else "Ver Vídeo",
+                                        color = CianoNeon,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
+                        }
+
+                        // Player de Vídeo Nativo Embutido no próprio Card (sem sair do app!)
+                        if (videoAbertoNesteCard && !videoUrl.isNullOrBlank()) {
+                            PlayerVideoNativoCard(
+                                tituloExercicio = nomeExercicio,
+                                grupoMuscular = grupoMuscular,
+                                videoUrl = videoUrl,
+                                instrucoes = instrucoes,
+                                aoFechar = { exercicioComVideoAbertoId = null }
+                            )
                         }
 
                         seriesDoExercicio.forEach { serie ->
