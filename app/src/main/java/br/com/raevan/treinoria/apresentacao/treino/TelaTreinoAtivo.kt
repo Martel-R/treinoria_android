@@ -75,7 +75,6 @@ fun TelaTreinoAtivo(
     val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
-    var fichasDisponiveis by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var fichaAtual by remember { mutableStateOf(fichaSelecionada) }
     var perfil by remember { mutableStateOf<PerfilDto?>(null) }
 
@@ -86,23 +85,18 @@ fun TelaTreinoAtivo(
     var presetCadencia by remember { mutableStateOf(CADENCE_PRESETS_ANDROID.first()) }
     var vozAtiva by remember { mutableStateOf(true) }
 
-    // Estado da Tela Inteira de Contagem de Repetições + Descanso + Sugestão da Próxima Série
+    // Estado da Tela Inteira Minimalista de Contagem de Repetições -> Descanso -> Próxima Série
     var indiceSerieTelaInteira by remember { mutableStateOf<Int?>(null) }
     var faseTelaInteira by remember { mutableStateOf(FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) }
     var repAtualTelaInteira by remember { mutableStateOf(1) }
     var alvoRepsTelaInteira by remember { mutableStateOf(10) }
-    var labelFaseMovimento by remember { mutableStateOf("PREPARE-SE...") }
-    var subLabelMovimento by remember { mutableStateOf("Segure a carga na posição inicial") }
+    var labelFaseMovimento by remember { mutableStateOf("PREPARE-SE") }
     var descansoTotalTelaInteira by remember { mutableStateOf(90) }
     var descansoRestanteTelaInteira by remember { mutableStateOf(0) }
 
-    // Cronômetro de descanso da barra rápida (quando marca concluído manual sem abrir tela cheia)
+    // Cronômetro de descanso da barra rápida
     var descansoBarraRapida by remember { mutableStateOf(0) }
     var exercicioDescansoBarra by remember { mutableStateOf("") }
-
-    var exibirCalculadoraAnilhas by remember { mutableStateOf(false) }
-    var pesoAlvoCalculadora by remember { mutableStateOf("80") }
-    var pesoBarraCalculadora by remember { mutableStateOf("20") }
 
     var salvandoSessao by remember { mutableStateOf(false) }
     var feelingEscolhido by remember { mutableStateOf("Ótimo 🔥") }
@@ -135,21 +129,21 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Carrega fichas se nenhuma foi passada
+    // Carrega automaticamente APENAS o Treino do Dia (se nenhuma ficha específica foi clicada)
     LaunchedEffect(Unit) {
         RepositorioTreinoria.garantirDadosIniciaisUsuario()
         perfil = RepositorioTreinoria.carregarPerfil()
         val lista = RepositorioTreinoria.listarFichasTreino()
-        fichasDisponiveis = lista
+        val sessoes = RepositorioTreinoria.listarSessoesRecentes(10)
         if (fichaAtual == null && lista.isNotEmpty()) {
-            fichaAtual = lista.first()
+            fichaAtual = RepositorioTreinoria.selecionarTreinoDoDia(lista, sessoes)
         } else if (fichaAtual != null) {
             val atualizada = lista.find { it.id == fichaAtual?.id }
             if (atualizada != null) fichaAtual = atualizada
         }
     }
 
-    // Popula séries quando a ficha muda
+    // Popula séries quando o treino do dia é carregado
     LaunchedEffect(fichaAtual?.id, fichaAtual?.items?.size) {
         val f = fichaAtual ?: return@LaunchedEffect
         seriesEstado.clear()
@@ -187,7 +181,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Cronômetro regressivo de descanso da barra rápida
+    // Cronômetro regressivo de descanso rápido
     LaunchedEffect(descansoBarraRapida) {
         if (descansoBarraRapida > 0) {
             delay(1000)
@@ -199,7 +193,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Função para iniciar uma série em TELA INTEIRA a partir da configuração de cadência e repetições
+    // Inicia uma série em TELA INTEIRA
     val iniciarSerieEmTelaInteira = { idxSerie: Int ->
         val serie = seriesEstado.getOrNull(idxSerie)
         if (serie != null) {
@@ -213,61 +207,53 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Motor em Tempo Real da Tela Inteira:
-    // 1) Conta cada repetição (Excêntrica -> Pausa -> Concêntrica) até `alvoRepsTelaInteira`
-    // 2) Ao terminar a última repetição, marca a série como concluída e inicia o DESCANSO na mesma tela
-    // 3) Ao acabar o descanso (ou se o usuário pular), transiciona para PRONTO_PROXIMA_SERIE e aguarda o clique do usuário!
+    // Motor em Tempo Real da Tela Inteira Minimalista
     LaunchedEffect(indiceSerieTelaInteira, faseTelaInteira) {
         val idx = indiceSerieTelaInteira ?: return@LaunchedEffect
         val serieAtual = seriesEstado.getOrNull(idx) ?: return@LaunchedEffect
 
         if (faseTelaInteira == FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) {
             labelFaseMovimento = "PREPARAR..."
-            subLabelMovimento = "${serieAtual.exerciseName} • ${serieAtual.setNumber}ª Série (${alvoRepsTelaInteira} reps)"
-            falar("Preparar para ${serieAtual.exerciseName}, ${alvoRepsTelaInteira} repetições")
-            delay(1800)
+            falar("Preparar, ${alvoRepsTelaInteira} repetições")
+            delay(1500)
 
             for (rep in 1..alvoRepsTelaInteira) {
                 if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
                 repAtualTelaInteira = rep
 
-                // Fase Excêntrica (Descida controlada)
+                // Excêntrica (Descida)
                 falar("Desce")
                 for (seg in 1..presetCadencia.eccentric) {
                     if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
-                    labelFaseMovimento = "⬇️ DESCENDO ($seg/${presetCadencia.eccentric}s)"
-                    subLabelMovimento = "Controle a fase excêntrica"
+                    labelFaseMovimento = "DESCE (${seg}s)"
                     delay(1000)
                 }
 
-                // Fase Isométrica / Pausa na base
+                // Pausa Isométrica
                 if (presetCadencia.pause > 0) {
                     falar("Segura")
                     for (seg in 1..presetCadencia.pause) {
                         if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
-                        labelFaseMovimento = "⏸️ SEGURA EMBAIXO!"
-                        subLabelMovimento = "Máxima tensão muscular"
+                        labelFaseMovimento = "SEGURA"
                         delay(1000)
                     }
                 }
 
-                // Fase Concêntrica (Subida explosiva)
+                // Concêntrica (Subida)
                 falar("Sobe $rep")
                 for (seg in 1..presetCadencia.concentric.coerceAtLeast(1)) {
                     if (indiceSerieTelaInteira != idx || faseTelaInteira != FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) return@LaunchedEffect
-                    labelFaseMovimento = "⬆️ SOBE FORTE! ($rep/$alvoRepsTelaInteira)"
-                    subLabelMovimento = "Contraia no topo do movimento"
+                    labelFaseMovimento = "SOBE!"
                     delay(1000)
                 }
             }
 
-            // Terminou todas as repetições configuradas para esta série!
-            // Marca a série como concluída e inicia imediatamente a contagem de descanso na MESMA tela inteira
+            // Concluiu todas as repetições -> Marca série e inicia o Descanso na mesma tela
             if (idx in seriesEstado.indices) {
                 seriesEstado[idx] = seriesEstado[idx].copy(completed = true)
             }
             GerenciadorNotificacoes.vibrarFimDescanso(contexto)
-            falar("Série concluída! Iniciando descanso de ${serieAtual.restSeconds} segundos.")
+            falar("Série concluída! Descanso iniciado.")
             descansoTotalTelaInteira = serieAtual.restSeconds.coerceAtLeast(15)
             descansoRestanteTelaInteira = descansoTotalTelaInteira
             faseTelaInteira = FaseExecucaoTelaInteira.EM_DESCANSO
@@ -278,13 +264,13 @@ fun TelaTreinoAtivo(
             }
             if (indiceSerieTelaInteira == idx && faseTelaInteira == FaseExecucaoTelaInteira.EM_DESCANSO) {
                 GerenciadorNotificacoes.notificarFimDescanso(contexto, serieAtual.exerciseName)
-                falar("Descanso finalizado! Toque no botão quando estiver pronto para iniciar a próxima série.")
+                falar("Descanso concluído! Toque para iniciar a próxima série.")
                 faseTelaInteira = FaseExecucaoTelaInteira.PRONTO_PROXIMA_SERIE
             }
         }
     }
 
-    // MODAL DE TELA INTEIRA: Contagem de Repetições -> Descanso na Mesma Tela -> Sugestão da Próxima Série (aguardando clique)
+    // TELA INTEIRA MINIMALISTA E LIMPA (Apenas o essencial!)
     if (indiceSerieTelaInteira != null) {
         val idxAtual = indiceSerieTelaInteira!!
         val serieAtual = seriesEstado.getOrNull(idxAtual)
@@ -308,11 +294,11 @@ fun TelaTreinoAtivo(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(24.dp),
+                            .padding(horizontal = 24.dp, vertical = 28.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Topo da Tela Inteira
+                        // Topo Minimalista: Apenas nome do exercício, série e botão discreto de fechar (X)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -320,292 +306,132 @@ fun TelaTreinoAtivo(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = serieAtual.muscleGroup.uppercase(),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = VerdeEsmeralda
-                                )
-                                Text(
                                     text = serieAtual.exerciseName,
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Black,
                                     color = TextoPrimario
                                 )
                                 Text(
-                                    text = "${serieAtual.setNumber}ª de ${serieAtual.totalSetsForExercise} Séries • ${serieAtual.weightKg} kg × ${alvoRepsTelaInteira} reps • Ritmo ${presetCadencia.id}",
-                                    fontSize = 12.sp,
+                                    text = "${serieAtual.setNumber}ª Série • ${serieAtual.weightKg} kg",
+                                    fontSize = 14.sp,
                                     color = CianoNeon,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-                            Row {
-                                IconButton(onClick = { vozAtiva = !vozAtiva }) {
-                                    Icon(
-                                        imageVector = if (vozAtiva) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                                        contentDescription = "Voz",
-                                        tint = if (vozAtiva) VerdeEsmeralda else TextoSecundario
-                                    )
-                                }
-                                IconButton(onClick = { indiceSerieTelaInteira = null }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Fechar Tela Inteira",
-                                        tint = TextoSecundario
-                                    )
-                                }
+                            IconButton(onClick = { indiceSerieTelaInteira = null }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Fechar",
+                                    tint = TextoSecundario
+                                )
                             }
                         }
 
-                        // Centro Gigante de acordo com a Fase (Executando Repetições | Em Descanso | Pronto p/ Próxima Série)
+                        // Centro Focado e Gigante (Sem poluição visual)
                         when (faseTelaInteira) {
                             FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                    verticalArrangement = Arrangement.spacedBy(24.dp)
                                 ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(999.dp),
-                                        color = RoxoDestaque.copy(alpha = 0.2f)
-                                    ) {
-                                        Text(
-                                            text = "🎧 CADÊNCIA GUIADA ${presetCadencia.id}",
-                                            color = RoxoDestaque,
-                                            fontWeight = FontWeight.Black,
-                                            fontSize = 12.sp,
-                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                                        )
-                                    }
-
-                                    // Círculo Gigante com Contador de Repetições
                                     Box(
                                         modifier = Modifier
-                                            .size(230.dp)
+                                            .size(260.dp)
                                             .clip(CircleShape)
                                             .background(VerdeEsmeralda.copy(alpha = 0.14f)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                             Text(
-                                                text = "REPETIÇÃO",
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = TextoSecundario
-                                            )
-                                            Text(
-                                                text = "$repAtualTelaInteira/$alvoRepsTelaInteira",
-                                                fontSize = 68.sp,
+                                                text = "$repAtualTelaInteira",
+                                                fontSize = 96.sp,
                                                 fontWeight = FontWeight.Black,
                                                 color = VerdeEsmeralda
                                             )
                                             Text(
-                                                text = "${serieAtual.weightKg} kg",
+                                                text = "de $alvoRepsTelaInteira reps",
                                                 fontSize = 18.sp,
                                                 fontWeight = FontWeight.Bold,
-                                                color = CianoNeon
+                                                color = TextoSecundario
                                             )
                                         }
                                     }
 
                                     Text(
                                         text = labelFaseMovimento,
-                                        fontSize = 26.sp,
+                                        fontSize = 34.sp,
                                         fontWeight = FontWeight.Black,
                                         color = TextoPrimario,
                                         textAlign = TextAlign.Center
                                     )
-                                    Text(
-                                        text = subLabelMovimento,
-                                        fontSize = 14.sp,
-                                        color = TextoSecundario,
-                                        textAlign = TextAlign.Center
-                                    )
-
-                                    LinearProgressIndicator(
-                                        progress = {
-                                            (repAtualTelaInteira.toFloat() / alvoRepsTelaInteira.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(10.dp)
-                                            .clip(RoundedCornerShape(6.dp)),
-                                        color = VerdeEsmeralda
-                                    )
                                 }
                             }
 
-                            FaseExecucaoTelaInteira.EM_DESCANSO -> {
+                            FaseExecucaoTelaInteira.EM_DESCANSO,
+                            FaseExecucaoTelaInteira.PRONTO_PROXIMA_SERIE -> {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                                    verticalArrangement = Arrangement.spacedBy(20.dp)
                                 ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(999.dp),
-                                        color = VerdeEsmeralda.copy(alpha = 0.2f)
-                                    ) {
-                                        Text(
-                                            text = "✅ ${serieAtual.setNumber}ª SÉRIE CONCLUÍDA! RECUPERE O FÔLEGO",
-                                            color = VerdeEsmeraldaClaro,
-                                            fontWeight = FontWeight.Black,
-                                            fontSize = 12.sp,
-                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                                        )
-                                    }
-
                                     Box(
                                         modifier = Modifier
-                                            .size(220.dp)
+                                            .size(250.dp)
                                             .clip(CircleShape)
-                                            .background(AmbarDestaque.copy(alpha = 0.15f)),
+                                            .background(
+                                                if (descansoRestanteTelaInteira > 0)
+                                                    AmbarDestaque.copy(alpha = 0.15f)
+                                                else
+                                                    VerdeEsmeralda.copy(alpha = 0.18f)
+                                            ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                             Text(
-                                                text = "DESCANSO",
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = AmbarDestaque
+                                                text = if (descansoRestanteTelaInteira > 0) "DESCANSO" else "PRONTO!",
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = if (descansoRestanteTelaInteira > 0) AmbarDestaque else VerdeEsmeralda
                                             )
                                             Text(
                                                 text = "${descansoRestanteTelaInteira}s",
-                                                fontSize = 68.sp,
+                                                fontSize = 84.sp,
                                                 fontWeight = FontWeight.Black,
-                                                color = AmbarDestaque
+                                                color = if (descansoRestanteTelaInteira > 0) AmbarDestaque else VerdeEsmeralda
+                                            )
+                                        }
+                                    }
+
+                                    if (proximaSerie != null) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "PRÓXIMA SÉRIE",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = CianoNeon
                                             )
                                             Text(
-                                                text = "Meta: ${descansoTotalTelaInteira}s",
-                                                fontSize = 13.sp,
-                                                color = TextoSecundario
+                                                text = "${proximaSerie.exerciseName} • ${proximaSerie.setNumber}ª Série",
+                                                fontSize = 19.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = TextoPrimario,
+                                                textAlign = TextAlign.Center
                                             )
-                                        }
-                                    }
-
-                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        FilledTonalButton(
-                                            onClick = { descansoRestanteTelaInteira = (descansoRestanteTelaInteira - 15).coerceAtLeast(0) }
-                                        ) {
-                                            Text("-15s", fontWeight = FontWeight.Bold)
-                                        }
-                                        FilledTonalButton(
-                                            onClick = { descansoRestanteTelaInteira += 30 }
-                                        ) {
-                                            Text("+30s", fontWeight = FontWeight.Bold)
-                                        }
-                                        FilledTonalButton(
-                                            onClick = {
-                                                descansoRestanteTelaInteira = 0
-                                                faseTelaInteira = FaseExecucaoTelaInteira.PRONTO_PROXIMA_SERIE
-                                            }
-                                        ) {
-                                            Text("Pular Descanso", fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-
-                                    // Card de Prévia / Sugestão da Próxima Série já durante o descanso
-                                    if (proximaSerie != null) {
-                                        Surface(
-                                            shape = RoundedCornerShape(16.dp),
-                                            color = SuperficieCard,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Column(
-                                                modifier = Modifier.padding(14.dp),
-                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Text(
-                                                    text = "⏭️ PRÓXIMA SÉRIE SUGERIDA:",
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Black,
-                                                    color = CianoNeon
-                                                )
-                                                Text(
-                                                    text = "${proximaSerie.exerciseName} • ${proximaSerie.setNumber}ª Série",
-                                                    fontSize = 16.sp,
-                                                    fontWeight = FontWeight.Black,
-                                                    color = TextoPrimario
-                                                )
-                                                Text(
-                                                    text = "Carga: ${proximaSerie.weightKg} kg × ${proximaSerie.reps} repetições",
-                                                    fontSize = 13.sp,
-                                                    color = VerdeEsmeraldaClaro,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            FaseExecucaoTelaInteira.PRONTO_PROXIMA_SERIE -> {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(160.dp)
-                                            .clip(CircleShape)
-                                            .background(VerdeEsmeralda.copy(alpha = 0.18f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.CheckCircle,
-                                            contentDescription = null,
-                                            tint = VerdeEsmeralda,
-                                            modifier = Modifier.size(92.dp)
-                                        )
-                                    }
-
-                                    Text(
-                                        text = "DESCANSO CONCLUÍDO! 🔥",
-                                        fontSize = 26.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = VerdeEsmeralda,
-                                        textAlign = TextAlign.Center
-                                    )
-
-                                    if (proximaSerie != null) {
-                                        Surface(
-                                            shape = RoundedCornerShape(18.dp),
-                                            color = SuperficieCard,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Column(
-                                                modifier = Modifier.padding(18.dp),
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Text(
-                                                    text = "PRONTO PARA A PRÓXIMA SÉRIE?",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Black,
-                                                    color = CianoNeon
-                                                )
-                                                Text(
-                                                    text = proximaSerie.exerciseName,
-                                                    fontSize = 20.sp,
-                                                    fontWeight = FontWeight.Black,
-                                                    color = TextoPrimario,
-                                                    textAlign = TextAlign.Center
-                                                )
-                                                Text(
-                                                    text = "${proximaSerie.setNumber}ª Série • ${proximaSerie.weightKg} kg × ${proximaSerie.reps} repetições",
-                                                    fontSize = 15.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = VerdeEsmeraldaClaro
-                                                )
-                                                Text(
-                                                    text = "A contagem só iniciará quando você tocar no botão abaixo.",
-                                                    fontSize = 12.sp,
-                                                    color = TextoSecundario,
-                                                    textAlign = TextAlign.Center
-                                                )
-                                            }
+                                            Text(
+                                                text = "${proximaSerie.weightKg} kg × ${proximaSerie.reps} repetições",
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = VerdeEsmeraldaClaro
+                                            )
                                         }
                                     } else {
                                         Text(
-                                            text = "Parabéns! Você concluiu todas as séries planejadas desta ficha!",
-                                            fontSize = 15.sp,
-                                            color = TextoPrimario,
+                                            text = "Todas as séries desta ficha foram concluídas! 🏆",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = VerdeEsmeralda,
                                             textAlign = TextAlign.Center
                                         )
                                     }
@@ -613,11 +439,8 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Rodapé da Tela Inteira com Botões de Ação
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
+                        // Rodapé Minimalista: APENAS 1 botão principal de ação!
+                        Box(modifier = Modifier.fillMaxWidth()) {
                             when (faseTelaInteira) {
                                 FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
                                     Button(
@@ -629,16 +452,14 @@ fun TelaTreinoAtivo(
                                             descansoRestanteTelaInteira = descansoTotalTelaInteira
                                             faseTelaInteira = FaseExecucaoTelaInteira.EM_DESCANSO
                                         },
-                                        shape = RoundedCornerShape(16.dp),
+                                        shape = RoundedCornerShape(18.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                                        modifier = Modifier.fillMaxWidth().height(56.dp)
+                                        modifier = Modifier.fillMaxWidth().height(60.dp)
                                     ) {
-                                        Icon(Icons.Default.Check, contentDescription = null)
-                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            "Concluir Série Agora & Iniciar Descanso",
+                                            "Concluir Série & Iniciar Descanso",
                                             fontWeight = FontWeight.Black,
-                                            fontSize = 15.sp
+                                            fontSize = 16.sp
                                         )
                                     }
                                 }
@@ -650,103 +471,35 @@ fun TelaTreinoAtivo(
                                             onClick = {
                                                 iniciarSerieEmTelaInteira(proximaSerieIdx)
                                             },
-                                            shape = RoundedCornerShape(16.dp),
+                                            shape = RoundedCornerShape(18.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                                            modifier = Modifier.fillMaxWidth().height(58.dp)
+                                            modifier = Modifier.fillMaxWidth().height(62.dp)
                                         ) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp))
+                                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(26.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                text = "Iniciar Próxima: ${proximaSerie.setNumber}ª Série (${proximaSerie.reps} reps)",
+                                                text = "Iniciar Próxima (${proximaSerie.setNumber}ª Série • ${proximaSerie.reps} reps)",
                                                 fontWeight = FontWeight.Black,
-                                                fontSize = 15.sp
+                                                fontSize = 16.sp
                                             )
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = { indiceSerieTelaInteira = null },
+                                            shape = RoundedCornerShape(18.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                                            modifier = Modifier.fillMaxWidth().height(60.dp)
+                                        ) {
+                                            Text("Finalizar e Voltar ao Treino", fontWeight = FontWeight.Black, fontSize = 16.sp)
                                         }
                                     }
                                 }
                             }
-
-                            OutlinedButton(
-                                onClick = { indiceSerieTelaInteira = null },
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.fillMaxWidth().height(48.dp)
-                            ) {
-                                Text("Voltar para Visão Geral do Treino", fontWeight = FontWeight.Bold)
-                            }
                         }
                     }
                 }
             }
         }
-    }
-
-    if (exibirCalculadoraAnilhas) {
-        val total = pesoAlvoCalculadora.toDoubleOrNull() ?: 80.0
-        val barra = pesoBarraCalculadora.toDoubleOrNull() ?: 20.0
-        val porLado = ((total - barra) / 2.0).coerceAtLeast(0.0)
-
-        val anilhasDisponiveis = listOf(25.0, 20.0, 15.0, 10.0, 5.0, 2.5, 1.25)
-        val combinacao = remember(porLado) {
-            var restante = porLado
-            val lista = mutableListOf<String>()
-            for (a in anilhasDisponiveis) {
-                val qtd = (restante / a).toInt()
-                if (qtd > 0) {
-                    lista.add("${qtd}x ${if (a % 1.0 == 0.0) a.toInt() else a}kg")
-                    restante -= qtd * a
-                }
-            }
-            lista
-        }
-
-        AlertDialog(
-            onDismissRequest = { exibirCalculadoraAnilhas = false },
-            title = { Text("🧮 Calculadora de Anilhas por Lado", fontWeight = FontWeight.Black) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = pesoAlvoCalculadora,
-                            onValueChange = { pesoAlvoCalculadora = it },
-                            label = { Text("Carga Total (kg)") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = pesoBarraCalculadora,
-                            onValueChange = { pesoBarraCalculadora = it },
-                            label = { Text("Barra (kg)") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = VerdeEsmeralda.copy(alpha = 0.14f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                "Colocar em CADA LADO da barra: $porLado kg",
-                                fontWeight = FontWeight.Black,
-                                color = VerdeEsmeralda,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = if (combinacao.isEmpty()) "Apenas a barra (${barra.toInt()} kg)" else combinacao.joinToString(" + "),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = { exibirCalculadoraAnilhas = false }) { Text("Pronto") }
-            }
-        )
     }
 
     val seriesAgrupadas = seriesEstado.groupBy { it.exerciseId to it.exerciseName }
@@ -754,6 +507,7 @@ fun TelaTreinoAtivo(
     val volumeAtual = seriesEstado.filter { it.completed }.sumOf {
         (it.weightKg.toDoubleOrNull() ?: 0.0) * (it.reps.toIntOrNull() ?: 0)
     }
+    val nomeDiaHoje = remember { RepositorioTreinoria.obterNomeDiaHoje() }
 
     LazyColumn(
         modifier = Modifier
@@ -763,14 +517,14 @@ fun TelaTreinoAtivo(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // Barra Superior do Treino Ativo + Seletor de Ficha A/B/C/D
+        // Cabeçalho Limpo: Mostra APENAS o Treino do Dia (sem botões das 3 fichas)
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = SuperficieCard,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -778,70 +532,20 @@ fun TelaTreinoAtivo(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = fichaAtual?.name ?: "Treino Ativo",
+                                text = "TREINO DO DIA • ${nomeDiaHoje.uppercase()}",
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Black,
-                                fontSize = 18.sp,
+                                color = CianoNeon
+                            )
+                            Text(
+                                text = fichaAtual?.name ?: "Carregando Treino do Dia...",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 19.sp,
                                 color = VerdeEsmeralda
                             )
                             Text(
                                 text = "⏱️ ${segundosTreino / 60}m ${segundosTreino % 60}s • $totalConcluidas/${seriesEstado.size} séries • ${volumeAtual.toInt()} kg",
                                 fontSize = 12.sp,
-                                color = TextoSecundario
-                            )
-                        }
-                        IconButton(onClick = { exibirCalculadoraAnilhas = true }) {
-                            Icon(Icons.Default.Calculate, contentDescription = "Calculadora de Anilhas", tint = CianoNeon)
-                        }
-                    }
-
-                    // Troca rápida de ficha A/B/C/D
-                    if (fichasDisponiveis.size > 1) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            fichasDisponiveis.take(4).forEach { f ->
-                                FilterChip(
-                                    selected = fichaAtual?.id == f.id,
-                                    onClick = { fichaAtual = f },
-                                    label = {
-                                        Text(
-                                            f.name.take(14),
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Configuração do Ritmo / Cadência para a Tela Inteira de Repetições
-        item {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = SuperficieCard,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "🎧 Configuração de Cadência (Tela Inteira)",
-                                fontWeight = FontWeight.Black,
-                                fontSize = 13.sp,
-                                color = RoxoDestaque
-                            )
-                            Text(
-                                text = "Toque em ▶ Iniciar Série abaixo para abrir a contagem em tela cheia",
-                                fontSize = 11.sp,
                                 color = TextoSecundario
                             )
                         }
@@ -854,17 +558,20 @@ fun TelaTreinoAtivo(
                         }
                     }
 
+                    // Seletor enxuto de Cadência para a Contagem
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text("Cadência:", fontSize = 11.sp, color = TextoSecundario, fontWeight = FontWeight.Bold)
                         CADENCE_PRESETS_ANDROID.forEach { preset ->
                             FilterChip(
                                 selected = presetCadencia.id == preset.id,
                                 onClick = { presetCadencia = preset },
                                 label = {
                                     Text(
-                                        "Ritmo ${preset.id}",
+                                        preset.id,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -876,7 +583,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Lista de Exercícios e Séries da Ficha
+        // Lista de Exercícios e Séries do Treino do Dia
         seriesAgrupadas.forEach { (chave, seriesDoExercicio) ->
             val (_, nomeExercicio) = chave
             val videoUrl = seriesDoExercicio.firstOrNull()?.videoUrl
@@ -974,18 +681,18 @@ fun TelaTreinoAtivo(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                // Botão Iniciar Repetição em Tela Inteira!
+                                // Botão Iniciar Repetição em Tela Inteira Minimalista!
                                 FilledTonalButton(
                                     onClick = {
                                         if (idxGlobal >= 0) {
                                             iniciarSerieEmTelaInteira(idxGlobal)
                                         }
                                     },
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Iniciar Repetições em Tela Inteira",
+                                        contentDescription = "Iniciar Repetições",
                                         tint = VerdeEsmeralda,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -1019,7 +726,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Finalizar Treino + Envio Automático do Resumo no WhatsApp
+        // Finalizar Treino do Dia
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -1027,7 +734,7 @@ fun TelaTreinoAtivo(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Finalizar & Salvar Sessão", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    Text("Finalizar Treino do Dia", fontWeight = FontWeight.Black, fontSize = 16.sp)
 
                     OutlinedTextField(
                         value = notasSessao,
@@ -1076,8 +783,8 @@ fun TelaTreinoAtivo(
                                     )
                                 }
                                 salvandoSessao = false
-                                feedbackSalvo = "✅ Treino salvo com sucesso e resumo enviado no WhatsApp!"
-                                delay(1200)
+                                feedbackSalvo = "✅ Treino salvo com sucesso!"
+                                delay(1000)
                                 aoConcluirTreino()
                             }
                         },
@@ -1091,7 +798,7 @@ fun TelaTreinoAtivo(
                         } else {
                             Icon(Icons.Default.Check, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Concluir Treino & Enviar Resumo WhatsApp", fontWeight = FontWeight.Black)
+                            Text("Concluir Treino do Dia", fontWeight = FontWeight.Black)
                         }
                     }
                 }

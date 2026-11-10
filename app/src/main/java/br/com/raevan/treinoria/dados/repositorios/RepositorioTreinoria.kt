@@ -15,6 +15,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.Normalizer
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.OffsetDateTime
 
@@ -27,6 +29,63 @@ object RepositorioTreinoria {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun semAcento(texto: String): String {
+        val norm = Normalizer.normalize(texto.lowercase(), Normalizer.Form.NFD)
+        return norm.replace(Regex("[\\p{InCombiningDiacriticalMarks}]"), "")
+    }
+
+    fun obterNomeDiaHoje(): String {
+        return when (LocalDate.now().dayOfWeek) {
+            DayOfWeek.MONDAY -> "Segunda-feira"
+            DayOfWeek.TUESDAY -> "Terça-feira"
+            DayOfWeek.WEDNESDAY -> "Quarta-feira"
+            DayOfWeek.THURSDAY -> "Quinta-feira"
+            DayOfWeek.FRIDAY -> "Sexta-feira"
+            DayOfWeek.SATURDAY -> "Sábado"
+            DayOfWeek.SUNDAY -> "Domingo"
+            else -> "Hoje"
+        }
+    }
+
+    /**
+     * Seleciona exatamente o Treino do Dia com base no `day_of_week` da ficha (ex: "Segunda / Quinta")
+     * ou, se hoje não estiver marcado, a próxima ficha na sequência após a última sessão concluída.
+     */
+    fun selecionarTreinoDoDia(
+        fichas: List<FichaTreinoDto>,
+        sessoesRecentes: List<SessaoTreinoDto> = emptyList()
+    ): FichaTreinoDto? {
+        if (fichas.isEmpty()) return null
+
+        val tokensHoje = when (LocalDate.now().dayOfWeek) {
+            DayOfWeek.MONDAY -> listOf("segunda", "seg")
+            DayOfWeek.TUESDAY -> listOf("terca", "ter")
+            DayOfWeek.WEDNESDAY -> listOf("quarta", "qua")
+            DayOfWeek.THURSDAY -> listOf("quinta", "qui")
+            DayOfWeek.FRIDAY -> listOf("sexta", "sex")
+            DayOfWeek.SATURDAY -> listOf("sabado", "sab")
+            DayOfWeek.SUNDAY -> listOf("domingo", "dom")
+            else -> emptyList()
+        }
+
+        val fichaDia = fichas.firstOrNull { f ->
+            val diaRaw = f.dayOfWeek ?: return@firstOrNull false
+            val limpo = semAcento(diaRaw)
+            val partes = limpo.split(Regex("[\\s,/•\\-|]+")).filter { it.isNotBlank() }
+            tokensHoje.any { tk -> partes.contains(tk) || limpo.contains(tk) }
+        }
+        if (fichaDia != null) return fichaDia
+
+        val ultimoPlanId = sessoesRecentes.firstOrNull()?.planId
+        if (!ultimoPlanId.isNullOrBlank() && fichas.size > 1) {
+            val idxUltimo = fichas.indexOfFirst { it.id == ultimoPlanId }
+            if (idxUltimo >= 0) {
+                return fichas[(idxUltimo + 1) % fichas.size]
+            }
+        }
+        return fichas.first()
     }
 
     suspend fun carregarPerfil(): PerfilDto? = withContext(Dispatchers.IO) {
@@ -73,9 +132,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Carrega `workout_plans` + `workout_plan_items` + `exercises`, exatamente como a Web (`src/App.tsx`).
-     */
     suspend fun listarFichasTreino(targetUserId: String? = null): List<FichaTreinoDto> = withContext(Dispatchers.IO) {
         val uid = targetUserId ?: obterUserIdAtual() ?: return@withContext emptyList()
         try {
@@ -117,7 +173,7 @@ object RepositorioTreinoria {
         subtitulo: String,
         diaSemana: String,
         corHex: String = "#10b981",
-        exerciciosSelecionados: List<Triple<String, Int, String>> // (exerciseId, sets, reps)
+        exerciciosSelecionados: List<Triple<String, Int, String>>
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             val novaFicha = buildJsonObject {

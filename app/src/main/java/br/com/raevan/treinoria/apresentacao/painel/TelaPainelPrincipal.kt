@@ -64,6 +64,12 @@ fun TelaPainelPrincipal(
         recarregarDados()
     }
 
+    // Seleciona apenas o TREINO DO DIA (não mostra os três)
+    val treinoDoDia = remember(fichas, sessoes) {
+        RepositorioTreinoria.selecionarTreinoDoDia(fichas, sessoes)
+    }
+    val nomeDiaHoje = remember { RepositorioTreinoria.obterNomeDiaHoje() }
+
     val volumeTotalAcumulado = remember(sessoes) {
         sessoes.sumOf { it.totalVolumeKg }.toInt()
     }
@@ -253,7 +259,7 @@ fun TelaPainelPrincipal(
                                     color = CianoNeon
                                 )
                                 Text(
-                                    "Gerencie seus alunos, monte fichas A/B/C/D e envie via WhatsApp",
+                                    "Gerencie seus alunos, monte fichas e envie via WhatsApp",
                                     fontSize = 11.sp,
                                     color = TextoPrimario
                                 )
@@ -265,7 +271,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // KPIs de Treino + Botão Check-in Pré-Treino IA
+        // KPIs de Treino
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -306,30 +312,111 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Botão Check-in Pré-Treino IA + Montar Fichas
+        // Card Exclusivo: TREINO DO DIA (Apenas 1 ficha — a de hoje!)
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(
-                    onClick = { exibirCheckinIa = true },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                    modifier = Modifier.weight(1f).height(48.dp)
-                ) {
-                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Check-in IA", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    "🔥 Treino do Dia ($nomeDiaHoje)",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 16.sp,
+                    color = VerdeEsmeralda
+                )
+                if (carregando) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    TextButton(onClick = aoAbrirPersonalHub) {
+                        Text("Ver/Editar Fichas", fontSize = 12.sp, color = CianoNeon)
+                    }
                 }
-                OutlinedButton(
-                    onClick = aoAbrirPersonalHub,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.weight(1f).height(48.dp)
+            }
+        }
+
+        if (treinoDoDia != null) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = SuperficieCard,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Assignment, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Minhas Fichas", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CianoNeon)
+                    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    treinoDoDia.name,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 18.sp,
+                                    color = VerdeEsmeraldaClaro
+                                )
+                                if (!treinoDoDia.description.isNullOrBlank()) {
+                                    Text(treinoDoDia.description, fontSize = 12.sp, color = TextoSecundario)
+                                }
+                                if (!treinoDoDia.dayOfWeek.isNullOrBlank()) {
+                                    Text(
+                                        "📅 Programado: ${treinoDoDia.dayOfWeek}",
+                                        fontSize = 11.sp,
+                                        color = CianoNeon,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        if (treinoDoDia.items.isNotEmpty()) {
+                            HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
+                            treinoDoDia.items.forEach { item ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "• ${item.exercise?.name ?: "Exercício"}",
+                                        fontSize = 13.sp,
+                                        color = TextoPrimario,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    val pesoTxt = if ((item.targetWeightKg ?: 0.0) > 0) " (${item.targetWeightKg!!.toInt()}kg)" else ""
+                                    Text(
+                                        text = "${item.targetSets}x ${item.targetReps}$pesoTxt",
+                                        fontSize = 12.sp,
+                                        color = CianoNeon,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            Button(
+                                onClick = { aoIniciarTreinoDaFicha(treinoDoDia) },
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                                modifier = Modifier.weight(2f).height(50.dp)
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Iniciar Treino do Dia", fontWeight = FontWeight.Black, fontSize = 14.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { exibirCheckinIa = true },
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.weight(1f).height(50.dp)
+                            ) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("IA", fontWeight = FontWeight.Bold, color = CianoNeon)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -420,107 +507,6 @@ fun TelaPainelPrincipal(
                                 )
                             }
                         )
-                    }
-                }
-            }
-        }
-
-        // Seção Minhas Fichas de Treino (Splits A/B/C/D)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Meu Plano de Treino (${fichas.size} Fichas)",
-                    fontWeight = FontWeight.Black,
-                    fontSize = 16.sp
-                )
-                if (carregando) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    IconButton(onClick = { recarregarDados() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Atualizar", tint = VerdeEsmeralda)
-                    }
-                }
-            }
-        }
-
-        items(fichas, key = { it.id }) { ficha ->
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = SuperficieCard,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(ficha.name, fontWeight = FontWeight.Black, fontSize = 16.sp, color = VerdeEsmeraldaClaro)
-                                if (!ficha.dayOfWeek.isNullOrBlank()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = SuperficieElevada
-                                    ) {
-                                        Text(
-                                            ficha.dayOfWeek,
-                                            fontSize = 10.sp,
-                                            color = TextoSecundario,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
-                            if (!ficha.description.isNullOrBlank()) {
-                                Text(ficha.description, fontSize = 12.sp, color = TextoSecundario)
-                            }
-                            if (!ficha.prescribedByName.isNullOrBlank()) {
-                                Text(
-                                    "👨‍🏫 Prescrito por: ${ficha.prescribedByName}",
-                                    fontSize = 11.sp,
-                                    color = CianoNeon,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                        Button(
-                            onClick = { aoIniciarTreinoDaFicha(ficha) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Treinar", fontWeight = FontWeight.Black, fontSize = 13.sp)
-                        }
-                    }
-
-                    if (ficha.items.isNotEmpty()) {
-                        HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
-                        ficha.items.forEach { item ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "• ${item.exercise?.name ?: "Exercício"}",
-                                    fontSize = 12.sp,
-                                    color = TextoPrimario,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                val pesoTxt = if ((item.targetWeightKg ?: 0.0) > 0) " (${item.targetWeightKg!!.toInt()}kg)" else ""
-                                Text(
-                                    text = "${item.targetSets}x ${item.targetReps}$pesoTxt",
-                                    fontSize = 11.sp,
-                                    color = CianoNeon,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
                     }
                 }
             }
