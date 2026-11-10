@@ -455,7 +455,7 @@ fun TelaPersonalEConstrutor() {
                                 colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.AssignmentAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Prescrever Ficha", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
