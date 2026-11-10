@@ -36,6 +36,7 @@ import br.com.raevan.treinoria.dados.repositorios.EstatisticaExercicioHistorico
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
 import br.com.raevan.treinoria.nucleo.componentes.PlayerVideoNativoCard
 import br.com.raevan.treinoria.nucleo.notificacoes.GerenciadorNotificacoes
+import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1161,7 +1162,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Sugestão de Pré-Treino e Pós-Treino desta Ficha (igual à Web!)
                     if (!fichaAtual?.preWorkoutMeal.isNullOrBlank() || !fichaAtual?.postWorkoutMeal.isNullOrBlank()) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (!fichaAtual?.preWorkoutMeal.isNullOrBlank()) {
@@ -1195,7 +1195,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Barra Rápida de Descanso (30s / 60s / 90s / 120s) + Seletor de Cadência
                     HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1313,7 +1312,6 @@ fun TelaTreinoAtivo(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        // Topo do Card do Exercício: Grupo Muscular + Equipamento + Badge PR + Nome + Contador Feitas
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1391,7 +1389,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Barra de Ações do Exercício igual à Web: [▶ Vídeo Execução] [🔄 Trocar Equivalente] [🧮 Calc. Anilhas]
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1494,7 +1491,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Player de Vídeo Nativo Embutido no próprio Card (sem sair do app!)
                         if (videoAbertoNesteCard && !videoUrl.isNullOrBlank()) {
                             PlayerVideoNativoCard(
                                 tituloExercicio = nomeExercicio,
@@ -1505,7 +1501,7 @@ fun TelaTreinoAtivo(
                             )
                         }
 
-                        // Lista de Séries deste Exercício: CADA SÉRIE TEM 2 LINHAS LARGAS (Igual ao Mobile Web!)
+                        // Lista de Séries deste Exercício: CADA SÉRIE TEM 2 LINHAS LARGAS
                         seriesDoExercicio.forEach { serie ->
                             val idxGlobal = seriesEstado.indexOf(serie)
                             Surface(
@@ -1519,7 +1515,6 @@ fun TelaTreinoAtivo(
                                         .padding(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // LINHA 1 DA SÉRIE: [Badge 1ª / W] + [Anterior: Xkg × Y] ...... [🎧 Play] [X] [✓ OK/Feito]
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1529,7 +1524,6 @@ fun TelaTreinoAtivo(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            // Toque no número da série alterna entre Normal (1ª) e Aquecimento (W)
                                             Surface(
                                                 shape = RoundedCornerShape(8.dp),
                                                 color = when {
@@ -1580,7 +1574,6 @@ fun TelaTreinoAtivo(
                                             }
                                         }
 
-                                        // Botões da direita da Linha 1: [🎧 Cadência / Play Tela Cheia] + [X Remover] + [✓ Feito/OK]
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1626,7 +1619,6 @@ fun TelaTreinoAtivo(
                                                         .clickable {
                                                             if (idxGlobal >= 0) {
                                                                 seriesEstado.removeAt(idxGlobal)
-                                                                // Renumera séries deste exercício
                                                                 var num = 1
                                                                 seriesEstado.indices.forEach { i ->
                                                                     if (seriesEstado[i].exerciseId == exId) {
@@ -1686,13 +1678,12 @@ fun TelaTreinoAtivo(
                                         }
                                     }
 
-                                    // LINHA 2 DA SÉRIE: 2 Colunas Largas (50% Carga kg | 50% Repetições) — Nunca quebra texto!
+                                    // LINHA 2 DA SÉRIE: 2 Colunas Largas (50% Carga kg | 50% Repetições)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        // Coluna 1 (50%): Stepper Largo de CARGA (kg)
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
                                             color = FundoAcademia,
@@ -1781,7 +1772,6 @@ fun TelaTreinoAtivo(
                                             }
                                         }
 
-                                        // Coluna 2 (50%): Stepper Largo de REPETIÇÕES (reps)
                                         Surface(
                                             shape = RoundedCornerShape(12.dp),
                                             color = FundoAcademia,
@@ -1873,7 +1863,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Rodapé do Card do Exercício igual à Web: [+ Série] e [Remover exercício]
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1921,7 +1910,6 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Botão Adicionar Exercício ao Treino (igual à Web!)
         item {
             OutlinedButton(
                 onClick = { exibirAdicionarExercicioModal = true },
@@ -1938,7 +1926,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Finalizar ou Descartar Treino do Dia
+        // Finalizar ou Descartar Treino do Dia (Salva no Supabase + Grava no Health Connect / Google Fit!)
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -1982,6 +1970,16 @@ fun TelaTreinoAtivo(
                                     notas = notasSessao,
                                     seriesConcluidas = concluidas
                                 )
+
+                                // Sincroniza automaticamente a sessão de Musculação + Calorias no Health Connect (Google Fit / Samsung Health)
+                                val gravouHealth = GerenciadorHealthConnect.gravarTreinoConcluido(
+                                    context = contexto,
+                                    tituloTreino = fichaAtual?.name ?: "Treino de Musculação",
+                                    duracaoSegundos = segundosTreino.coerceAtLeast(60),
+                                    volumeTotalKg = sessao?.totalVolumeKg ?: volumeAtual,
+                                    notas = notasSessao
+                                )
+
                                 val fone = perfil?.whatsappPhone
                                 if (!fone.isNullOrBlank() && sessao != null) {
                                     RepositorioTreinoria.enviarMensagemWhatsapp(
@@ -1996,8 +1994,12 @@ fun TelaTreinoAtivo(
                                     )
                                 }
                                 salvandoSessao = false
-                                feedbackSalvo = "✅ Treino salvo com sucesso!"
-                                delay(1000)
+                                feedbackSalvo = if (gravouHealth) {
+                                    "✅ Treino salvo no TreinorIA e sincronizado com o Health Connect (Google Fit)!"
+                                } else {
+                                    "✅ Treino salvo com sucesso!"
+                                }
+                                delay(1200)
                                 aoConcluirTreino()
                             }
                         },
@@ -2011,7 +2013,7 @@ fun TelaTreinoAtivo(
                         } else {
                             Icon(Icons.Default.Check, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Concluir & Salvar Treino", fontWeight = FontWeight.Black)
+                            Text("Concluir & Sincronizar Health Connect", fontWeight = FontWeight.Black)
                         }
                     }
 

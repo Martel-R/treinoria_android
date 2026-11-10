@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import br.com.raevan.treinoria.dados.remoto.dto.MedidaCorporalDto
 import br.com.raevan.treinoria.dados.remoto.dto.RefeicaoLogDto
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -59,7 +60,6 @@ fun TelaNutricaoEvolucao() {
     var analisandoPrato by remember { mutableStateOf(false) }
     var mensagemScanner by remember { mutableStateOf<String?>(null) }
 
-    // Launcher para Tirar Foto com a Câmera Nativa
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bmp: Bitmap? ->
@@ -69,7 +69,6 @@ fun TelaNutricaoEvolucao() {
         }
     }
 
-    // Launcher para Escolher Foto da Galeria
     val galeriaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -100,6 +99,10 @@ fun TelaNutricaoEvolucao() {
             carregando = true
             refeicoes = RepositorioTreinoria.listarRefeicoesRecentes()
             medidas = RepositorioTreinoria.listarMedidasCorporais()
+            val saude = GerenciadorHealthConnect.lerResumoDiario(contexto)
+            if (pesoKg.isBlank() && saude.ultimoPesoKg != null && saude.ultimoPesoKg > 0) {
+                pesoKg = saude.ultimoPesoKg.toString()
+            }
             carregando = false
         }
     }
@@ -172,7 +175,6 @@ fun TelaNutricaoEvolucao() {
                             color = TextoSecundario
                         )
 
-                        // Seletor do momento da refeição
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -186,7 +188,6 @@ fun TelaNutricaoEvolucao() {
                             }
                         }
 
-                        // Botões de Tirar Foto na Hora ou Abrir Galeria
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -213,7 +214,6 @@ fun TelaNutricaoEvolucao() {
                             }
                         }
 
-                        // Pré-visualização da Foto Capturada
                         if (fotoCapturadaBitmap != null) {
                             Box(
                                 modifier = Modifier
@@ -370,7 +370,7 @@ fun TelaNutricaoEvolucao() {
                 }
             }
         } else {
-            // Aba 1: Medidas Corporais & Evolução
+            // Aba 1: Medidas Corporais & Evolução (Sincronizado com Health Connect!)
             item {
                 Surface(shape = RoundedCornerShape(18.dp), color = SuperficieCard, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -440,8 +440,9 @@ fun TelaNutricaoEvolucao() {
                             onClick = {
                                 salvandoMedida = true
                                 escopo.launch {
+                                    val pDouble = pesoKg.toDoubleOrNull()
                                     RepositorioTreinoria.salvarMedidaCorporal(
-                                        pesoKg = pesoKg.toDoubleOrNull(),
+                                        pesoKg = pDouble,
                                         bfPct = bfPct.toDoubleOrNull(),
                                         peitoCm = peitoCm.toDoubleOrNull(),
                                         cinturaCm = cinturaCm.toDoubleOrNull(),
@@ -449,6 +450,9 @@ fun TelaNutricaoEvolucao() {
                                         coxaCm = coxaCm.toDoubleOrNull(),
                                         notas = "Registrado pelo App Android"
                                     )
+                                    if (pDouble != null && pDouble > 0) {
+                                        GerenciadorHealthConnect.gravarPesoCorporal(contexto, pDouble)
+                                    }
                                     pesoKg = ""
                                     bfPct = ""
                                     salvandoMedida = false
@@ -459,7 +463,7 @@ fun TelaNutricaoEvolucao() {
                             colors = ButtonDefaults.buttonColors(containerColor = CianoNeon),
                             modifier = Modifier.fillMaxWidth().height(48.dp)
                         ) {
-                            Text("Salvar Medidas no Histórico", fontWeight = FontWeight.Black)
+                            Text("Salvar Medidas & Sincronizar Health Connect", fontWeight = FontWeight.Black)
                         }
                     }
                 }

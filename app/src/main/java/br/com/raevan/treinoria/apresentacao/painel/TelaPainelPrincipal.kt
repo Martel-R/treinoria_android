@@ -1,5 +1,6 @@
 package br.com.raevan.treinoria.apresentacao.painel
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.health.connect.client.PermissionController
 import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.HabitoDiarioDto
@@ -28,6 +30,8 @@ import br.com.raevan.treinoria.nucleo.atualizacao.DialogoAtualizacaoApp
 import br.com.raevan.treinoria.nucleo.atualizacao.GerenciadorAtualizacaoApp
 import br.com.raevan.treinoria.nucleo.atualizacao.InfoVersaoRemota
 import br.com.raevan.treinoria.nucleo.componentes.DialogoVideoExercicioNativo
+import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
+import br.com.raevan.treinoria.nucleo.saude.ResumoSaudeDiaria
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.launch
 
@@ -44,6 +48,10 @@ fun TelaPainelPrincipal(
     var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(emptyList()) }
     var habitoHoje by remember { mutableStateOf(HabitoDiarioDto()) }
+
+    // Estado do Android Health Connect (Google Fit / Samsung Health / Smartwatches)
+    var resumoSaude by remember { mutableStateOf(ResumoSaudeDiaria()) }
+    var sincronizandoSaude by remember { mutableStateOf(false) }
 
     var exercicioVideoEmbutido by remember { mutableStateOf<ExercicioDto?>(null) }
 
@@ -62,6 +70,24 @@ fun TelaPainelPrincipal(
     var respostaCoachIa by remember { mutableStateOf<String?>(null) }
     var consultandoIa by remember { mutableStateOf(false) }
 
+    val atualizarResumoSaude = {
+        escopo.launch {
+            sincronizandoSaude = true
+            resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
+            if (resumoSaude.horasSonoUltimaNoite > 0.0) {
+                horasSono = resumoSaude.horasSonoUltimaNoite.toString()
+            }
+            sincronizandoSaude = false
+        }
+    }
+
+    // Launcher oficial do Health Connect para pedir permissões de Saúde
+    val permissoesSaudeLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { _ ->
+        atualizarResumoSaude()
+    }
+
     val recarregarDados = {
         escopo.launch {
             carregando = true
@@ -71,6 +97,10 @@ fun TelaPainelPrincipal(
                 fichas = RepositorioTreinoria.listarFichasTreino()
                 sessoes = RepositorioTreinoria.listarSessoesRecentes(15)
                 habitoHoje = RepositorioTreinoria.obterHabitoHoje()
+                resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
+                if (resumoSaude.horasSonoUltimaNoite > 0.0) {
+                    horasSono = resumoSaude.horasSonoUltimaNoite.toString()
+                }
             } finally {
                 carregando = false
             }
@@ -104,7 +134,6 @@ fun TelaPainelPrincipal(
         }
     }
 
-    // Modal de Atualização OTA quando encontrada manualmente
     if (infoAtualizacaoManual != null) {
         DialogoAtualizacaoApp(
             infoRemota = infoAtualizacaoManual!!,
@@ -114,7 +143,6 @@ fun TelaPainelPrincipal(
         )
     }
 
-    // Modal de Vídeo Nativo Dentro do Próprio App
     if (exercicioVideoEmbutido != null && !exercicioVideoEmbutido?.videoUrl.isNullOrBlank()) {
         val ex = exercicioVideoEmbutido!!
         DialogoVideoExercicioNativo(
@@ -135,7 +163,7 @@ fun TelaPainelPrincipal(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Calibre as cargas de hoje com base na sua recuperação:",
+                        "Calibre as cargas de hoje com base na sua recuperação (sincronizado com Health Connect):",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -188,9 +216,12 @@ fun TelaPainelPrincipal(
                     onClick = {
                         consultandoIa = true
                         escopo.launch {
+                            val dadosSmartwatch = if (resumoSaude.permissoesConcedidas) {
+                                "Dados Health Connect: ${resumoSaude.passosHoje} passos hoje, ${resumoSaude.caloriasAtivasKcal} kcal ativas, FC recente: ${resumoSaude.ultimoBatimentoBpm ?: "N/D"} bpm."
+                            } else ""
                             respostaCoachIa = RepositorioTreinoria.consultarCoachIa(
                                 "Atleta ${perfil?.name ?: ""}, objetivo ${perfil?.goal ?: "Hipertrofia"}. " +
-                                    "Check-in pré-treino: Energia ${energiaNivel.toInt()}/10, Sono ${horasSono}h, Dor: $dorMuscular. " +
+                                    "Check-in pré-treino: Energia ${energiaNivel.toInt()}/10, Sono ${horasSono}h, Dor: $dorMuscular. $dadosSmartwatch " +
                                     "Recomende em até 4 linhas o ajuste percentual de carga, RPE alvo e aquecimento para o treino de hoje."
                             )
                             consultandoIa = false
@@ -271,47 +302,41 @@ fun TelaPainelPrincipal(
                     }
 
                     // Botão Visível de Verificar Atualização do App (OTA)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilledTonalButton(
-                            enabled = !verificandoAtualizacao,
-                            onClick = {
-                                verificandoAtualizacao = true
-                                mensagemStatusAtualizacao = null
-                                escopo.launch {
-                                    val disponivel = GerenciadorAtualizacaoApp.verificarAtualizacaoDisponivel(contexto)
-                                    verificandoAtualizacao = false
-                                    if (disponivel != null) {
-                                        infoAtualizacaoManual = disponivel
+                    FilledTonalButton(
+                        enabled = !verificandoAtualizacao,
+                        onClick = {
+                            verificandoAtualizacao = true
+                            mensagemStatusAtualizacao = null
+                            escopo.launch {
+                                val disponivel = GerenciadorAtualizacaoApp.verificarAtualizacaoDisponivel(contexto)
+                                verificandoAtualizacao = false
+                                if (disponivel != null) {
+                                    infoAtualizacaoManual = disponivel
+                                } else {
+                                    val remota = GerenciadorAtualizacaoApp.consultarVersaoRemota()
+                                    if (remota != null) {
+                                        mensagemStatusAtualizacao = "✅ Seu app já está na versão mais recente (v$versaoInstaladaNome • Build #$versaoInstaladaCodigo)!"
                                     } else {
-                                        val remota = GerenciadorAtualizacaoApp.consultarVersaoRemota()
-                                        if (remota != null) {
-                                            mensagemStatusAtualizacao = "✅ Seu app já está na versão mais recente (v$versaoInstaladaNome • Build #$versaoInstaladaCodigo)!"
-                                        } else {
-                                            mensagemStatusAtualizacao = "⚠️ Não foi possível consultar o servidor agora. Tente novamente em instantes."
-                                        }
+                                        mensagemStatusAtualizacao = "⚠️ Não foi possível consultar o servidor agora. Tente novamente em instantes."
                                     }
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (verificandoAtualizacao) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Verificando nova versão...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            } else {
-                                Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Verificar Atualização do App (v$versaoInstaladaNome)",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = CianoNeon
-                                )
                             }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (verificandoAtualizacao) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Verificando nova versão...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Verificar Atualização do App (v$versaoInstaladaNome)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CianoNeon
+                            )
                         }
                     }
 
@@ -322,6 +347,173 @@ fun TelaPainelPrincipal(
                             color = VerdeEsmeraldaClaro,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+            }
+        }
+
+        // Card Oficial: ANDROID HEALTH CONNECT (Google Fit / Samsung Health / Smartwatches)
+        item {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = SuperficieCard,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Watch,
+                                contentDescription = null,
+                                tint = VerdeEsmeralda,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Health Connect • Google Fit & Relógios",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 14.sp,
+                                    color = TextoPrimario
+                                )
+                                Text(
+                                    text = if (resumoSaude.permissoesConcedidas)
+                                        "Conectado • Sincronizando Treinos, Passos, BPM e Sono"
+                                    else
+                                        "Sincronize com Google Fit, Samsung Health, Garmin e Mi Fitness",
+                                    fontSize = 11.sp,
+                                    color = if (resumoSaude.permissoesConcedidas) VerdeEsmeraldaClaro else TextoSecundario
+                                )
+                            }
+                        }
+
+                        if (resumoSaude.permissoesConcedidas) {
+                            IconButton(
+                                onClick = { atualizarResumoSaude() },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                if (sincronizandoSaude) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Atualizar", tint = CianoNeon)
+                                }
+                            }
+                        }
+                    }
+
+                    if (resumoSaude.permissoesConcedidas) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SuperficieElevada,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("👣 Passos", fontSize = 10.sp, color = TextoSecundario)
+                                    Text(
+                                        text = "${resumoSaude.passosHoje}",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 15.sp,
+                                        color = VerdeEsmeralda
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SuperficieElevada,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("🔥 Ativas", fontSize = 10.sp, color = TextoSecundario)
+                                    Text(
+                                        text = "${resumoSaude.caloriasAtivasKcal} kcal",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 15.sp,
+                                        color = AmbarDestaque
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SuperficieElevada,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("❤️ Pulso", fontSize = 10.sp, color = TextoSecundario)
+                                    Text(
+                                        text = if (resumoSaude.ultimoBatimentoBpm != null) "${resumoSaude.ultimoBatimentoBpm} bpm" else "-- bpm",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 15.sp,
+                                        color = VermelhoAlerta
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SuperficieElevada,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("😴 Sono", fontSize = 10.sp, color = TextoSecundario)
+                                    Text(
+                                        text = if (resumoSaude.horasSonoUltimaNoite > 0) "${resumoSaude.horasSonoUltimaNoite}h" else "--",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 15.sp,
+                                        color = CianoNeon
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (resumoSaude.disponivelNoAparelho) {
+                                    try {
+                                        permissoesSaudeLauncher.launch(GerenciadorHealthConnect.PERMISSOES_SAUDE)
+                                    } catch (_: Throwable) {
+                                        GerenciadorHealthConnect.abrirConfiguracoesOuPlayStoreHealthConnect(contexto)
+                                    }
+                                } else {
+                                    GerenciadorHealthConnect.abrirConfiguracoesOuPlayStoreHealthConnect(contexto)
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                            modifier = Modifier.fillMaxWidth().height(44.dp)
+                        ) {
+                            Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (resumoSaude.precisaInstalarAppHealthConnect)
+                                    "Instalar / Ativar Health Connect"
+                                else
+                                    "Conectar Google Fit & Smartwatch (Health Connect)",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }
@@ -528,7 +720,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Widget Diário de Hidratação (Água) + Creatina
+        // Widget Diário de Hidratação (Água) + Creatina (Grava automaticamente no Health Connect!)
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -577,6 +769,7 @@ fun TelaPainelPrincipal(
                                         habitoHoje.waterMl + 250,
                                         habitoHoje.creatineTaken
                                     )
+                                    GerenciadorHealthConnect.gravarAguaIngerida(contexto, 250)
                                 }
                             },
                             modifier = Modifier.weight(1f)
@@ -590,6 +783,7 @@ fun TelaPainelPrincipal(
                                         habitoHoje.waterMl + 500,
                                         habitoHoje.creatineTaken
                                     )
+                                    GerenciadorHealthConnect.gravarAguaIngerida(contexto, 500)
                                 }
                             },
                             modifier = Modifier.weight(1f)

@@ -13,8 +13,8 @@ android {
         applicationId = "br.com.raevan.treinoria"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.7.0-pro"
+        versionCode = 9
+        versionName = "1.8.0-pro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -76,6 +76,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation("androidx.fragment:fragment-ktx:1.8.6")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha10")
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
