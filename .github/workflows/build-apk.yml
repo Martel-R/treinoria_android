@@ -1,0 +1,81 @@
+name: Build TreinorIA Android APK & Publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Verify Permanent Signing Keystore
+        run: |
+          keytool -list -v -keystore app/treinoria-signing.jks -storepass familiaos123 | head -n 20
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Release APK (Signed)
+        run: ./gradlew assembleRelease --no-daemon --stacktrace -Dorg.gradle.java.home="$JAVA_HOME"
+
+      - name: Prepare APK & Version Manifest
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk treinoria.apk
+          ls -lh treinoria.apk
+          export VERSION_CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts | head -1)
+          export VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          export COMMIT_MSG=$(git log -1 --pretty=%s)
+          export PUBLISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          export APK_SIZE=$(stat -c%s treinoria.apk)
+          python3 -c '
+          import json, os
+          data = {
+              "versionCode": int(os.environ.get("VERSION_CODE") or 1),
+              "versionName": os.environ.get("VERSION_NAME") or "1.0.0-pro",
+              "apkUrl": "https://treinoria.raevan.com.br/apk/treinoria.apk",
+              "fallbackApkUrl": "https://github.com/Martel-R/treinoria_android/releases/download/latest-apk/treinoria.apk",
+              "apkSizeBytes": int(os.environ.get("APK_SIZE") or 0),
+              "commitSha": (os.environ.get("GITHUB_SHA") or "")[:7],
+              "publishedAt": os.environ.get("PUBLISHED_AT") or "",
+              "releaseNotes": os.environ.get("COMMIT_MSG") or "Nova versão oficial do TreinorIA PRO Android"
+          }
+          with open("version.json", "w") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          '
+          cat version.json
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: treinoria-apk
+          path: |
+            treinoria.apk
+            version.json
+
+      - name: Publish APK & Version Manifest to GitHub Release (latest-apk)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION_NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          VERSION_CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts | head -1)
+          gh release delete latest-apk --yes --cleanup-tag || true
+          gh release create latest-apk treinoria.apk version.json \
+            --title "TreinorIA PRO Android v${VERSION_NAME} (Build #${VERSION_CODE})" \
+            --notes "Build oficial assinado v${VERSION_NAME} (versionCode=${VERSION_CODE}) gerado pelo commit ${GITHUB_SHA::7}." \
+            --latest
