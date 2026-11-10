@@ -1,6 +1,15 @@
 package br.com.raevan.treinoria.apresentacao.treino
 
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.launch
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,6 +28,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -33,7 +44,10 @@ import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SerieSessaoDto
 import br.com.raevan.treinoria.dados.repositorios.*
+import br.com.raevan.treinoria.nucleo.componentes.BarraControleMidiaTelaCheia
+import br.com.raevan.treinoria.nucleo.componentes.GeradorCardTreinoStories
 import br.com.raevan.treinoria.nucleo.componentes.PlayerVideoNativoCard
+import br.com.raevan.treinoria.nucleo.componentes.ResumoExercicioCard
 import br.com.raevan.treinoria.nucleo.notificacoes.GerenciadorNotificacoes
 import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import br.com.raevan.treinoria.nucleo.tema.*
@@ -115,6 +129,40 @@ fun TelaTreinoAtivo(
     var consultandoCheckinIa by remember { mutableStateOf(false) }
     var propostaAjusteIa by remember { mutableStateOf<RespostaCheckinPreTreinoIa?>(null) }
     var resumoIaAplicadoBanner by remember { mutableStateOf<String?>(null) }
+    var prontidaoIaAplicada by remember { mutableStateOf<Int?>(null) }
+
+    // =========================================================================
+    // MODAL DE CONCLUSÃO DO TREINO (Idêntico ao `showFinishModal` da Web!)
+    // =========================================================================
+    var exibirModalConcluirTreino by remember { mutableStateOf(false) }
+    var feelingEscolhido by remember { mutableStateOf("Ótimo") }
+    var notasSessao by remember { mutableStateOf("") }
+    var fotoPosTreinoBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var enviarResumoWhatsapp by remember { mutableStateOf(true) }
+    var salvandoSessao by remember { mutableStateOf(false) }
+    var feedbackSalvo by remember { mutableStateOf<String?>(null) }
+
+    val cameraPosTreinoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bmp: Bitmap? ->
+        if (bmp != null) fotoPosTreinoBitmap = bmp
+    }
+
+    val galeriaPosTreinoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(contexto.contentResolver, uri))
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Images.Media.getBitmap(contexto.contentResolver, uri)
+                }
+                fotoPosTreinoBitmap = bmp.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (_: Throwable) {}
+        }
+    }
 
     // Demais Modais
     var exibirConfirmacaoDescartar by remember { mutableStateOf(false) }
@@ -137,7 +185,7 @@ fun TelaTreinoAtivo(
     var presetCadencia by remember { mutableStateOf(CADENCE_PRESETS_ANDROID.first()) }
     var vozAtiva by remember { mutableStateOf(true) }
 
-    // Estado da Tela Inteira Minimalista
+    // Estado da Tela Inteira Minimalista (Agora com Controle de Mídia Integrado!)
     var indiceSerieTelaInteira by remember { mutableStateOf<Int?>(null) }
     var faseTelaInteira by remember { mutableStateOf(FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) }
     var repAtualTelaInteira by remember { mutableStateOf(1) }
@@ -148,11 +196,6 @@ fun TelaTreinoAtivo(
 
     var descansoBarraRapida by remember { mutableStateOf(0) }
     var exercicioDescansoBarra by remember { mutableStateOf("") }
-
-    var salvandoSessao by remember { mutableStateOf(false) }
-    var feelingEscolhido by remember { mutableStateOf("Ótimo 🔥") }
-    var notasSessao by remember { mutableStateOf("") }
-    var feedbackSalvo by remember { mutableStateOf<String?>(null) }
 
     val seriesEstado = remember { mutableStateListOf<SerieEditavel>() }
 
@@ -179,7 +222,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Carrega automaticamente APENAS o Treino do Dia + Histórico de PRs + Catálogo
     LaunchedEffect(Unit) {
         RepositorioTreinoria.garantirDadosIniciaisUsuario()
         perfil = RepositorioTreinoria.carregarPerfil()
@@ -195,7 +237,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Inicializa a mensagem de boas-vindas do Personal Trainer IA assim que a ficha carrega (igual à Web!)
     LaunchedEffect(fichaAtual?.name, perfil?.name) {
         val nomeTreino = fichaAtual?.name ?: return@LaunchedEffect
         if (!jaMostrouBoasVindasCheckin) {
@@ -205,7 +246,7 @@ fun TelaTreinoAtivo(
             mensagensChatPreTreino.add(
                 MensagemChatIa(
                     role = "assistant",
-                    content = "Fala, $primeiroNome! 💪 Vi que hoje o seu treino é $nomeTreino e já carreguei todo o seu histórico de cargas, medidas, hidratação e smartwatch.\n\n" +
+                    content = "Fala, $primeiroNome! 💪 Vi que hoje o seu treino é $nomeTreino e já carreguei todo o seu histórico de cargas, medidas, mapa de fadiga, hidratação e smartwatch.\n\n" +
                         "Antes de começarmos o 1º exercício, me conta rapidinho:\n" +
                         "1️⃣ O que você comeu no pré-treino (ou está em jejum)?\n" +
                         "2️⃣ Já fez ou vai fazer aeróbico/cardio hoje?\n" +
@@ -216,7 +257,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Popula séries quando o treino do dia é carregado
     LaunchedEffect(fichaAtual?.id, fichaAtual?.items?.size, estatisticasExercicios.size) {
         val f = fichaAtual ?: return@LaunchedEffect
         if (seriesEstado.isNotEmpty() && seriesEstado.firstOrNull()?.exerciseId == f.items.firstOrNull()?.exerciseId) {
@@ -282,6 +322,453 @@ fun TelaTreinoAtivo(
         }
     }
 
+    val seriesAgrupadas = seriesEstado.groupBy { it.exerciseId to it.exerciseName }
+    val totalConcluidas = seriesEstado.count { it.completed }
+    val volumeAtual = seriesEstado.filter { it.completed }.ifEmpty { seriesEstado }.sumOf {
+        (it.weightKg.toDoubleOrNull() ?: 0.0) * (it.reps.toIntOrNull() ?: 0)
+    }
+    val nomeDiaHoje = remember { RepositorioTreinoria.obterNomeDiaHoje() }
+
+    // Detecta PRs batidos na sessão atual
+    val prsBatidosNaSessao = remember(seriesEstado.toList(), estatisticasExercicios) {
+        val listaPrs = mutableListOf<Triple<String, Double, Int>>()
+        seriesEstado.groupBy { it.exerciseId }.forEach { (exId, lista) ->
+            val prAntigo = estatisticasExercicios[exId]?.maxWeightKg ?: 0.0
+            val melhorSerie = lista
+                .filter { (it.completed || totalConcluidas == 0) && (it.weightKg.toDoubleOrNull() ?: 0.0) > prAntigo }
+                .maxByOrNull { it.weightKg.toDoubleOrNull() ?: 0.0 }
+            val pesoMelhor = melhorSerie?.weightKg?.toDoubleOrNull() ?: 0.0
+            if (melhorSerie != null && pesoMelhor > 0 && prAntigo > 0) {
+                listaPrs.add(
+                    Triple(
+                        melhorSerie.exerciseName,
+                        pesoMelhor,
+                        melhorSerie.reps.toIntOrNull() ?: 10
+                    )
+                )
+            }
+        }
+        listaPrs
+    }
+
+    // =========================================================================
+    // MODAL DE CONCLUSÃO DO TREINO (Idêntico ao `showFinishModal` da Web!)
+    // =========================================================================
+    if (exibirModalConcluirTreino) {
+        val duracaoMin = (segundosTreino / 60).coerceAtLeast(1)
+        val qtdSeriesEfetivas = if (totalConcluidas > 0) totalConcluidas else seriesEstado.size
+
+        Dialog(
+            onDismissRequest = { if (!salvandoSessao) exibirModalConcluirTreino = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 20.dp),
+                shape = RoundedCornerShape(26.dp),
+                color = SuperficieCard
+            ) {
+                LazyColumn(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // Cabeçalho
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = VerdeEsmeralda)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Concluir Treino",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 19.sp,
+                                    color = TextoPrimario
+                                )
+                            }
+                            IconButton(
+                                onClick = { if (!salvandoSessao) exibirModalConcluirTreino = false }
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Fechar", tint = TextoSecundario)
+                            }
+                        }
+                    }
+
+                    // 3 KPIs do Resumo (Duração, Séries, Volume Total)
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = FundoAcademia,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 14.dp, horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Duração", fontSize = 11.sp, color = TextoSecundario)
+                                    Text(
+                                        "$duracaoMin min",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 17.sp,
+                                        color = TextoPrimario
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Séries", fontSize = 11.sp, color = TextoSecundario)
+                                    Text(
+                                        "$qtdSeriesEfetivas",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 17.sp,
+                                        color = VerdeEsmeralda
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Volume Total", fontSize = 11.sp, color = TextoSecundario)
+                                    Text(
+                                        "${volumeAtual.toInt()} kg",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 17.sp,
+                                        color = CianoNeon
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Celebração de PRs batidos na sessão (se houver)
+                    if (prsBatidosNaSessao.isNotEmpty()) {
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = AmbarDestaque.copy(alpha = 0.16f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        "🏆 NOVOS RECORDES PESSOAIS (PRs) BATIDOS HOJE!",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = AmbarDestaque
+                                    )
+                                    prsBatidosNaSessao.forEach { (nomeEx, peso, reps) ->
+                                        Text(
+                                            "• $nomeEx: ${formatarPeso(peso)} kg × $reps reps",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextoPrimario
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Seletor: Como você se sentiu no treino hoje? (4 opções idênticas à Web)
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Como você se sentiu no treino hoje?",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextoPrimario
+                            )
+                            val opcoesFeeling = listOf(
+                                "Insano 🔥" to "Insano",
+                                "Ótimo 💪" to "Ótimo",
+                                "Normal 👍" to "Normal",
+                                "Pesado 🥵" to "Cansado"
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                opcoesFeeling.forEach { (rotulo, valor) ->
+                                    val selecionado = feelingEscolhido == valor
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (selecionado) VerdeEsmeralda.copy(alpha = 0.22f) else FundoAcademia,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { feelingEscolhido = valor }
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = rotulo,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = if (selecionado) VerdeEsmeraldaClaro else TextoSecundario,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Foto Pós-Treino (Câmera ou Galeria)
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Foto Pós-Treino",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextoPrimario
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = { cameraPosTreinoLauncher.launch() },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Tirar Foto", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = { galeriaPosTreinoLauncher.launch("image/*") },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Galeria", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                                if (fotoPosTreinoBitmap != null) {
+                                    Image(
+                                        bitmap = fotoPosTreinoBitmap!!.asImageBitmap(),
+                                        contentDescription = "Foto Pós-Treino",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Observações / Anotações
+                    item {
+                        OutlinedTextField(
+                            value = notasSessao,
+                            onValueChange = { notasSessao = it },
+                            label = { Text("Observações / Anotações (ex: ótimo pump, subi carga...)") },
+                            maxLines = 3,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    // Checkbox: Enviar Resumo + PRs + Pós-Treino no meu WhatsApp
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = FundoAcademia,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { enviarResumoWhatsapp = !enviarResumoWhatsapp }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = null,
+                                        tint = VerdeEsmeralda,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            "Enviar Resumo + PRs + Pós-Treino no WhatsApp",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextoPrimario
+                                        )
+                                        Text(
+                                            "Notificação automática via Evolution API ao concluir",
+                                            fontSize = 10.sp,
+                                            color = TextoSecundario
+                                        )
+                                    }
+                                }
+                                Checkbox(
+                                    checked = enviarResumoWhatsapp,
+                                    onCheckedChange = { enviarResumoWhatsapp = it }
+                                )
+                            }
+                        }
+                    }
+
+                    // Botão: Gerar & Compartilhar Card HD p/ Stories (Estilo Strava/Hevy)
+                    item {
+                        OutlinedButton(
+                            onClick = {
+                                val listaResumoCard = seriesAgrupadas.map { (chave, lista) ->
+                                    ResumoExercicioCard(
+                                        nome = chave.second,
+                                        qtdSeries = lista.size,
+                                        maiorCargaKg = lista.maxOfOrNull { it.weightKg.toDoubleOrNull() ?: 0.0 } ?: 0.0
+                                    )
+                                }
+                                GeradorCardTreinoStories.gerarECompartilharCard(
+                                    context = contexto,
+                                    nomeAtleta = perfil?.name ?: "Atleta",
+                                    tituloTreino = fichaAtual?.name ?: "Sessão de Treino",
+                                    duracaoMinutos = duracaoMin,
+                                    seriesConcluidas = qtdSeriesEfetivas,
+                                    volumeTotalKg = volumeAtual.toInt(),
+                                    exercicios = listaResumoCard,
+                                    fotoFundo = fotoPosTreinoBitmap
+                                )
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Gerar Card do Treino p/ Stories (Estilo Strava/Hevy)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                color = CianoNeon
+                            )
+                        }
+                    }
+
+                    if (feedbackSalvo != null) {
+                        item {
+                            Text(
+                                text = feedbackSalvo!!,
+                                color = VerdeEsmeralda,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
+                    // Botão Principal de Confirmação
+                    item {
+                        Button(
+                            enabled = !salvandoSessao,
+                            onClick = {
+                                salvandoSessao = true
+                                escopo.launch {
+                                    val urlFoto = if (fotoPosTreinoBitmap != null) {
+                                        RepositorioTreinoria.enviarFotoPosTreinoStorage(fotoPosTreinoBitmap!!)
+                                    } else null
+
+                                    val concluidas = seriesEstado.filter { it.completed }.ifEmpty { seriesEstado }.map {
+                                        SerieSessaoDto(
+                                            exerciseId = it.exerciseId,
+                                            setNumber = it.setNumber,
+                                            weightKg = it.weightKg.toDoubleOrNull() ?: 0.0,
+                                            reps = it.reps.toIntOrNull() ?: 10,
+                                            isWarmup = it.isWarmup,
+                                            isCompleted = true
+                                        )
+                                    }
+
+                                    val sessao = RepositorioTreinoria.salvarSessaoTreinoConcluida(
+                                        planId = fichaAtual?.id,
+                                        titulo = fichaAtual?.name ?: "Sessão de Treino",
+                                        duracaoSegundos = segundosTreino.coerceAtLeast(60),
+                                        feeling = feelingEscolhido,
+                                        notas = notasSessao,
+                                        fotoUrl = urlFoto,
+                                        resumoConselhoIa = resumoIaAplicadoBanner,
+                                        prontidaoIa = prontidaoIaAplicada,
+                                        seriesConcluidas = concluidas
+                                    )
+
+                                    val gravouHealth = GerenciadorHealthConnect.gravarTreinoConcluido(
+                                        context = contexto,
+                                        tituloTreino = fichaAtual?.name ?: "Treino de Musculação",
+                                        duracaoSegundos = segundosTreino.coerceAtLeast(60),
+                                        volumeTotalKg = sessao?.totalVolumeKg ?: volumeAtual,
+                                        notas = notasSessao
+                                    )
+
+                                    val fone = perfil?.whatsappPhone
+                                    if (enviarResumoWhatsapp && !fone.isNullOrBlank() && sessao != null) {
+                                        val blocoPrs = if (prsBatidosNaSessao.isNotEmpty()) {
+                                            "\n🏆 *Novos PRs Batidos Hoje:*\n" +
+                                                prsBatidosNaSessao.joinToString("\n") { "• ${it.first}: *${formatarPeso(it.second)} kg × ${it.third} reps*" } + "\n"
+                                        } else ""
+
+                                        val blocoPosTreino = if (!fichaAtual?.postWorkoutMeal.isNullOrBlank()) {
+                                            "\n🥤 *Sugestão Pós-Treino:* ${fichaAtual?.postWorkoutMeal}\n"
+                                        } else ""
+
+                                        RepositorioTreinoria.enviarMensagemWhatsapp(
+                                            numero = fone,
+                                            texto = "🏋️ *TREINORIA PRO • Treino Concluído!*\n\n" +
+                                                "Parabéns, *${perfil?.name ?: "Atleta"}*!\n" +
+                                                "📋 Ficha: *${sessao.title}*\n" +
+                                                "⏱️ Duração: *${sessao.durationMinutes ?: duracaoMin} min*\n" +
+                                                "✅ Séries concluídas: *${concluidas.size}*\n" +
+                                                "🔥 Volume Total: *${sessao.totalVolumeKg.toInt()} kg*\n" +
+                                                "💪 Sensação: *$feelingEscolhido*" +
+                                                blocoPrs +
+                                                blocoPosTreino +
+                                                "\n🔗 Histórico completo: https://treinoria.raevan.com.br"
+                                        )
+                                    }
+
+                                    salvandoSessao = false
+                                    feedbackSalvo = if (gravouHealth) {
+                                        "✅ Treino salvo e sincronizado com o Health Connect!"
+                                    } else {
+                                        "✅ Treino salvo com sucesso!"
+                                    }
+                                    delay(900)
+                                    exibirModalConcluirTreino = false
+                                    aoConcluirTreino()
+                                }
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                            modifier = Modifier.fillMaxWidth().height(54.dp)
+                        ) {
+                            if (salvandoSessao) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Salvando Treino...", fontWeight = FontWeight.Black)
+                            } else {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Salvar e Finalizar Treino", fontWeight = FontWeight.Black, fontSize = 15.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // =========================================================================
     // MODAL DE CHECK-IN PRÉ-TREINO COM PERSONAL IA (IGUAL AO WEB APP!)
     // =========================================================================
@@ -303,7 +790,6 @@ fun TelaTreinoAtivo(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Topo do Check-in IA
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -344,7 +830,6 @@ fun TelaTreinoAtivo(
 
                     HorizontalDivider(color = BordaCard.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 8.dp))
 
-                    // Área Central Rolável: Mensagens + Chips Rápidos + Proposta de Ajuste
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -391,7 +876,7 @@ fun TelaTreinoAtivo(
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Text(
-                                            text = "Analisando seu histórico completo, medidas, sono, nutrição e recalibrando séries...",
+                                            text = "Analisando seu histórico completo, mapa de fadiga, medidas, sono e recalibrando séries...",
                                             fontSize = 12.sp,
                                             color = VerdeEsmeraldaClaro
                                         )
@@ -400,7 +885,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Chips Rápidos de 1 Toque (Igual ao Web App!)
                         if (mensagensChatPreTreino.size <= 1 && !consultandoCheckinIa) {
                             item {
                                 Surface(
@@ -480,7 +964,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Pré-visualização do Plano Adaptado pela IA + Botão de Aplicar no Treino
                         if (propostaAjusteIa != null) {
                             val prop = propostaAjusteIa!!
                             item {
@@ -596,6 +1079,7 @@ fun TelaTreinoAtivo(
                                                     }
                                                 }
                                                 resumoIaAplicadoBanner = "✨ ${prop.workoutSummaryAdvice} (Prontidão ${prop.readinessScore}%)"
+                                                prontidaoIaAplicada = prop.readinessScore
                                                 exibirCheckinPreTreinoModal = false
                                             },
                                             shape = RoundedCornerShape(12.dp),
@@ -618,7 +1102,6 @@ fun TelaTreinoAtivo(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Barra de envio de mensagem no rodapé do modal
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1171,7 +1654,6 @@ fun TelaTreinoAtivo(
         )
     }
 
-    // Inicia uma série em TELA INTEIRA
     val iniciarSerieEmTelaInteira = { idxSerie: Int ->
         val serie = seriesEstado.getOrNull(idxSerie)
         if (serie != null) {
@@ -1185,7 +1667,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Motor em Tempo Real da Tela Inteira Minimalista
     LaunchedEffect(indiceSerieTelaInteira, faseTelaInteira) {
         val idx = indiceSerieTelaInteira ?: return@LaunchedEffect
         val serieAtual = seriesEstado.getOrNull(idx) ?: return@LaunchedEffect
@@ -1244,7 +1725,9 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // TELA INTEIRA MINIMALISTA E LIMPA (Apenas o essencial!)
+    // =========================================================================
+    // TELA INTEIRA DE CONTAGEM E DESCANSO + CONTROLE DE MÍDIA INTEGRADO!
+    // =========================================================================
     if (indiceSerieTelaInteira != null) {
         val idxAtual = indiceSerieTelaInteira!!
         val serieAtual = seriesEstado.getOrNull(idxAtual)
@@ -1268,10 +1751,11 @@ fun TelaTreinoAtivo(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 24.dp, vertical = 28.dp),
+                            .padding(horizontal = 22.dp, vertical = 22.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
+                        // Topo: Nome do Exercício + Série + Fechar
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1300,15 +1784,16 @@ fun TelaTreinoAtivo(
                             }
                         }
 
+                        // Centro: Contagem de Repetições ou Cronômetro de Descanso
                         when (faseTelaInteira) {
                             FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(24.dp)
+                                    verticalArrangement = Arrangement.spacedBy(20.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(260.dp)
+                                            .size(230.dp)
                                             .clip(CircleShape)
                                             .background(VerdeEsmeralda.copy(alpha = 0.14f)),
                                         contentAlignment = Alignment.Center
@@ -1316,13 +1801,13 @@ fun TelaTreinoAtivo(
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                             Text(
                                                 text = "$repAtualTelaInteira",
-                                                fontSize = 96.sp,
+                                                fontSize = 88.sp,
                                                 fontWeight = FontWeight.Black,
                                                 color = VerdeEsmeralda
                                             )
                                             Text(
                                                 text = "de $alvoRepsTelaInteira reps",
-                                                fontSize = 18.sp,
+                                                fontSize = 17.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = TextoSecundario
                                             )
@@ -1331,7 +1816,7 @@ fun TelaTreinoAtivo(
 
                                     Text(
                                         text = labelFaseMovimento,
-                                        fontSize = 34.sp,
+                                        fontSize = 32.sp,
                                         fontWeight = FontWeight.Black,
                                         color = TextoPrimario,
                                         textAlign = TextAlign.Center
@@ -1343,11 +1828,11 @@ fun TelaTreinoAtivo(
                             FaseExecucaoTelaInteira.PRONTO_PROXIMA_SERIE -> {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(250.dp)
+                                            .size(220.dp)
                                             .clip(CircleShape)
                                             .background(
                                                 if (descansoRestanteTelaInteira > 0)
@@ -1360,13 +1845,13 @@ fun TelaTreinoAtivo(
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                             Text(
                                                 text = if (descansoRestanteTelaInteira > 0) "DESCANSO" else "PRONTO!",
-                                                fontSize = 15.sp,
+                                                fontSize = 14.sp,
                                                 fontWeight = FontWeight.Black,
                                                 color = if (descansoRestanteTelaInteira > 0) AmbarDestaque else VerdeEsmeralda
                                             )
                                             Text(
                                                 text = "${descansoRestanteTelaInteira}s",
-                                                fontSize = 84.sp,
+                                                fontSize = 78.sp,
                                                 fontWeight = FontWeight.Black,
                                                 color = if (descansoRestanteTelaInteira > 0) AmbarDestaque else VerdeEsmeralda
                                             )
@@ -1386,14 +1871,14 @@ fun TelaTreinoAtivo(
                                             )
                                             Text(
                                                 text = "${proximaSerie.exerciseName} • ${proximaSerie.setNumber}ª Série",
-                                                fontSize = 19.sp,
+                                                fontSize = 18.sp,
                                                 fontWeight = FontWeight.Black,
                                                 color = TextoPrimario,
                                                 textAlign = TextAlign.Center
                                             )
                                             Text(
                                                 text = "${proximaSerie.weightKg} kg × ${proximaSerie.reps} repetições",
-                                                fontSize = 15.sp,
+                                                fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = VerdeEsmeraldaClaro
                                             )
@@ -1401,7 +1886,7 @@ fun TelaTreinoAtivo(
                                     } else {
                                         Text(
                                             text = "Todas as séries desta ficha foram concluídas! 🏆",
-                                            fontSize = 16.sp,
+                                            fontSize = 15.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = VerdeEsmeralda,
                                             textAlign = TextAlign.Center
@@ -1411,7 +1896,13 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        Box(modifier = Modifier.fillMaxWidth()) {
+                        // Rodapé: Barra Nativa de Controle de Mídia (Spotify / YT Music) + Botão de Ação
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            BarraControleMidiaTelaCheia()
+
                             when (faseTelaInteira) {
                                 FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
                                     Button(
@@ -1425,12 +1916,12 @@ fun TelaTreinoAtivo(
                                         },
                                         shape = RoundedCornerShape(18.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                                        modifier = Modifier.fillMaxWidth().height(60.dp)
+                                        modifier = Modifier.fillMaxWidth().height(58.dp)
                                     ) {
                                         Text(
                                             "Concluir Série & Iniciar Descanso",
                                             fontWeight = FontWeight.Black,
-                                            fontSize = 16.sp
+                                            fontSize = 15.sp
                                         )
                                     }
                                 }
@@ -1444,24 +1935,27 @@ fun TelaTreinoAtivo(
                                             },
                                             shape = RoundedCornerShape(18.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                                            modifier = Modifier.fillMaxWidth().height(62.dp)
+                                            modifier = Modifier.fillMaxWidth().height(58.dp)
                                         ) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(26.dp))
+                                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = "Iniciar Próxima (${proximaSerie.setNumber}ª Série • ${proximaSerie.reps} reps)",
                                                 fontWeight = FontWeight.Black,
-                                                fontSize = 16.sp
+                                                fontSize = 15.sp
                                             )
                                         }
                                     } else {
                                         Button(
-                                            onClick = { indiceSerieTelaInteira = null },
+                                            onClick = {
+                                                indiceSerieTelaInteira = null
+                                                exibirModalConcluirTreino = true
+                                            },
                                             shape = RoundedCornerShape(18.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                                            modifier = Modifier.fillMaxWidth().height(60.dp)
+                                            modifier = Modifier.fillMaxWidth().height(58.dp)
                                         ) {
-                                            Text("Finalizar e Voltar ao Treino", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                                            Text("Abrir Resumo & Concluir Treino", fontWeight = FontWeight.Black, fontSize = 15.sp)
                                         }
                                     }
                                 }
@@ -1473,13 +1967,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    val seriesAgrupadas = seriesEstado.groupBy { it.exerciseId to it.exerciseName }
-    val totalConcluidas = seriesEstado.count { it.completed }
-    val volumeAtual = seriesEstado.filter { it.completed }.sumOf {
-        (it.weightKg.toDoubleOrNull() ?: 0.0) * (it.reps.toIntOrNull() ?: 0)
-    }
-    val nomeDiaHoje = remember { RepositorioTreinoria.obterNomeDiaHoje() }
-
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -1488,7 +1975,7 @@ fun TelaTreinoAtivo(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 14.dp)
     ) {
-        // Cabeçalho Completo igual ao Web App: Treino do Dia + Coach IA + Descartar + Pré/Pós-Treino + Barra de Descanso Rápido
+        // Cabeçalho Completo igual ao Web App: Treino do Dia + Coach IA + Concluir + Descartar + Barra de Descanso Rápido
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -1520,22 +2007,42 @@ fun TelaTreinoAtivo(
                                 color = TextoSecundario
                             )
                         }
+                    }
 
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            FilledTonalButton(
-                                onClick = { exibirCheckinPreTreinoModal = true },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Coach IA", fontSize = 11.sp, fontWeight = FontWeight.Black, color = VerdeEsmeralda)
-                            }
-                            IconButton(
-                                onClick = { exibirConfirmacaoDescartar = true },
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                Icon(Icons.Default.DeleteOutline, contentDescription = "Descartar", tint = VermelhoAlerta, modifier = Modifier.size(20.dp))
-                            }
+                    // 3 Botões de Topo idênticos ao cabeçalho do Web App: [Coach IA] [Descartar] [Concluir]
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { exibirCheckinPreTreinoModal = true },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Coach IA", fontSize = 11.sp, fontWeight = FontWeight.Black, color = VerdeEsmeralda)
+                        }
+
+                        OutlinedButton(
+                            onClick = { exibirConfirmacaoDescartar = true },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = VermelhoAlerta, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Descartar", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = VermelhoAlerta)
+                        }
+
+                        Button(
+                            onClick = { exibirModalConcluirTreino = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Concluir", fontSize = 11.sp, fontWeight = FontWeight.Black)
                         }
                     }
 
@@ -1686,7 +2193,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Lista de Exercícios e Séries (Layout em 2 Linhas por Série igual ao Mobile Web — NUNCA quebra texto!)
+        // Lista de Exercícios e Séries (Layout em 2 Linhas por Série igual ao Mobile Web)
         seriesAgrupadas.forEach { (chave, seriesDoExercicio) ->
             val (exId, nomeExercicio) = chave
             val primeiro = seriesDoExercicio.firstOrNull()
@@ -2080,7 +2587,6 @@ fun TelaTreinoAtivo(
                                         }
                                     }
 
-                                    // LINHA 2 DA SÉRIE: 2 Colunas Largas (50% Carga kg | 50% Repetições)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2328,106 +2834,29 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Finalizar ou Descartar Treino do Dia
+        // Botões Finais de Conclusão e Descarte (Abrem o Modal Completo igual ao Web App!)
         item {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = SuperficieCard,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Finalizar ou Descartar Treino", fontWeight = FontWeight.Black, fontSize = 16.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { exibirModalConcluirTreino = true },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Concluir Treino (Resumo, Foto & Card)", fontWeight = FontWeight.Black, fontSize = 15.sp)
+                }
 
-                    OutlinedTextField(
-                        value = notasSessao,
-                        onValueChange = { notasSessao = it },
-                        label = { Text("Observações do treino (opcional)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    if (feedbackSalvo != null) {
-                        Text(feedbackSalvo!!, color = VerdeEsmeralda, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-
-                    Button(
-                        onClick = {
-                            salvandoSessao = true
-                            escopo.launch {
-                                val concluidas = seriesEstado.filter { it.completed }.ifEmpty { seriesEstado }.map {
-                                    SerieSessaoDto(
-                                        exerciseId = it.exerciseId,
-                                        setNumber = it.setNumber,
-                                        weightKg = it.weightKg.toDoubleOrNull() ?: 0.0,
-                                        reps = it.reps.toIntOrNull() ?: 10,
-                                        isWarmup = it.isWarmup,
-                                        isCompleted = true
-                                    )
-                                }
-                                val sessao = RepositorioTreinoria.salvarSessaoTreinoConcluida(
-                                    planId = fichaAtual?.id,
-                                    titulo = fichaAtual?.name ?: "Treino concluído no App Android",
-                                    duracaoSegundos = segundosTreino.coerceAtLeast(60),
-                                    feeling = feelingEscolhido,
-                                    notas = notasSessao,
-                                    seriesConcluidas = concluidas
-                                )
-
-                                val gravouHealth = GerenciadorHealthConnect.gravarTreinoConcluido(
-                                    context = contexto,
-                                    tituloTreino = fichaAtual?.name ?: "Treino de Musculação",
-                                    duracaoSegundos = segundosTreino.coerceAtLeast(60),
-                                    volumeTotalKg = sessao?.totalVolumeKg ?: volumeAtual,
-                                    notas = notasSessao
-                                )
-
-                                val fone = perfil?.whatsappPhone
-                                if (!fone.isNullOrBlank() && sessao != null) {
-                                    RepositorioTreinoria.enviarMensagemWhatsapp(
-                                        numero = fone,
-                                        texto = "🏋️ *TREINORIA PRO • Treino Concluído!*\n\n" +
-                                            "Parabéns, *${perfil?.name ?: "Atleta"}*!\n" +
-                                            "📋 Ficha: *${sessao.title}*\n" +
-                                            "✅ Séries concluídas: *${concluidas.size}*\n" +
-                                            "🔥 Volume Total: *${sessao.totalVolumeKg.toInt()} kg*\n" +
-                                            "⏱️ Duração: *${sessao.durationMinutes ?: 45} min*\n\n" +
-                                            "🔗 Histórico completo: https://treinoria.raevan.com.br"
-                                    )
-                                }
-                                salvandoSessao = false
-                                feedbackSalvo = if (gravouHealth) {
-                                    "✅ Treino salvo no TreinorIA e sincronizado com o Health Connect (Google Fit)!"
-                                } else {
-                                    "✅ Treino salvo com sucesso!"
-                                }
-                                delay(1200)
-                                aoConcluirTreino()
-                            }
-                        },
-                        enabled = !salvandoSessao,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                        modifier = Modifier.fillMaxWidth().height(52.dp)
-                    ) {
-                        if (salvandoSessao) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Check, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Concluir & Sincronizar Health Connect", fontWeight = FontWeight.Black)
-                        }
-                    }
-
-                    OutlinedButton(
-                        onClick = { exibirConfirmacaoDescartar = true },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VermelhoAlerta),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Icon(Icons.Default.DeleteOutline, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Descartar Treino em Andamento", fontWeight = FontWeight.Bold)
-                    }
+                OutlinedButton(
+                    onClick = { exibirConfirmacaoDescartar = true },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = VermelhoAlerta),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Descartar Treino em Andamento", fontWeight = FontWeight.Bold)
                 }
             }
         }

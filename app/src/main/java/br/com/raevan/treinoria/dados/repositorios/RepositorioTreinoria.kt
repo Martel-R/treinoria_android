@@ -1,6 +1,7 @@
 package br.com.raevan.treinoria.dados.repositorios
 
 import android.content.Context
+import android.graphics.Bitmap
 import br.com.raevan.treinoria.dados.rede.ClienteSupabase
 import br.com.raevan.treinoria.dados.remoto.dto.*
 import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
@@ -10,12 +11,14 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
@@ -48,7 +51,7 @@ data class StatusMuscularInfo(
     val hoursSinceLastTrained: Long? = null,
     val weeklySets: Int = 0,
     val targetSets: Int = 12,
-    val status: String = "ready", // "ready", "recovering", "fatigued"
+    val status: String = "ready",
     val label: String = "100% Descansado"
 )
 
@@ -231,11 +234,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Calcula o Mapa Corporal de Fadiga & Recuperação (idêntico ao `MuscleAnalyticsSection.tsx` da Web):
-     * - Verifica as horas desde o último treino de cada grupo muscular (<28h Fadigado, 28-52h Quase Pronto, >52h 100% Pronto)
-     * - Soma o número de séries concluídas nos últimos 7 dias para cada músculo (meta de 12 a 16 séries/semana).
-     */
     suspend fun calcularMapaFadigaMuscular(): Map<String, StatusMuscularInfo> = withContext(Dispatchers.IO) {
         val resultado = mutableMapOf<String, StatusMuscularInfo>()
         MUSCULOS_RASTREADOS.forEach { m ->
@@ -756,12 +754,33 @@ object RepositorioTreinoria {
         }
     }
 
+    /**
+     * Faz upload da Foto Pós-Treino para o bucket `gym-images` do Supabase Storage e retorna a URL pública.
+     */
+    suspend fun enviarFotoPosTreinoStorage(bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
+        val uid = obterUserIdAtual() ?: return@withContext null
+        try {
+            val stream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 82, stream)
+            val bytes = stream.toByteArray()
+            val caminho = "workouts/$uid/treino_${System.currentTimeMillis()}.jpg"
+            val bucket = ClienteSupabase.client.storage.from("gym-images")
+            bucket.upload(caminho, bytes) { upsert = true }
+            bucket.publicUrl(caminho)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun salvarSessaoTreinoConcluida(
         planId: String?,
         titulo: String,
         duracaoSegundos: Int,
         feeling: String,
         notas: String,
+        fotoUrl: String? = null,
+        resumoConselhoIa: String? = null,
+        prontidaoIa: Int? = null,
         seriesConcluidas: List<SerieSessaoDto>
     ): SessaoTreinoDto? = withContext(Dispatchers.IO) {
         val uid = obterUserIdAtual() ?: return@withContext null
@@ -779,7 +798,10 @@ object RepositorioTreinoria {
                 put("duration_minutes", duracaoMinutos)
                 put("total_volume_kg", volumeTotal)
                 put("feeling", feeling)
+                if (!fotoUrl.isNullOrBlank()) put("photo_url", fotoUrl)
                 if (notas.isNotBlank()) put("notes", notas)
+                if (!resumoConselhoIa.isNullOrBlank()) put("ai_summary_advice", resumoConselhoIa)
+                if (prontidaoIa != null) put("ai_readiness_score", prontidaoIa)
             }
 
             val sessaoCriada = ClienteSupabase.client.from("workout_sessions")
