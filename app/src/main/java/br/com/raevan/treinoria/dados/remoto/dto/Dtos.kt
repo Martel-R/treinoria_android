@@ -80,7 +80,8 @@ data class SerieSessaoDto(
     val reps: Int = 10,
     val rpe: Double? = null,
     @SerialName("is_warmup") val isWarmup: Boolean = false,
-    @SerialName("is_completed") val isCompleted: Boolean = true
+    @SerialName("is_completed") val isCompleted: Boolean = true,
+    @SerialName("performed_at") val performedAt: String? = null
 )
 
 @Serializable

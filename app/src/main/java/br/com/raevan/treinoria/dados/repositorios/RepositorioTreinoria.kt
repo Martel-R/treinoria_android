@@ -269,7 +269,7 @@ object RepositorioTreinoria {
                 if (!resultado.containsKey(musculo)) return@forEach
 
                 val ts = try {
-                    OffsetDateTime.parse(s.performedAt).toInstant()
+                    OffsetDateTime.parse(s.performedAt ?: return@forEach).toInstant()
                 } catch (_: Exception) {
                     null
                 } ?: return@forEach
