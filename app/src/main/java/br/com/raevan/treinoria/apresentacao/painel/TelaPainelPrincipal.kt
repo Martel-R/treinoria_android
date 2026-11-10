@@ -29,10 +29,12 @@ import br.com.raevan.treinoria.dados.remoto.dto.HabitoDiarioDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SessaoTreinoDto
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.dados.repositorios.StatusMuscularInfo
 import br.com.raevan.treinoria.nucleo.atualizacao.DialogoAtualizacaoApp
 import br.com.raevan.treinoria.nucleo.atualizacao.GerenciadorAtualizacaoApp
 import br.com.raevan.treinoria.nucleo.atualizacao.InfoVersaoRemota
 import br.com.raevan.treinoria.nucleo.componentes.DialogoVideoExercicioNativo
+import br.com.raevan.treinoria.nucleo.componentes.MapaCorporalFadigaCard
 import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import br.com.raevan.treinoria.nucleo.saude.ResumoSaudeDiaria
 import br.com.raevan.treinoria.nucleo.tema.*
@@ -53,6 +55,7 @@ fun TelaPainelPrincipal(
     var perfil by remember { mutableStateOf<PerfilDto?>(null) }
     var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(emptyList()) }
+    var mapaFadigaMuscular by remember { mutableStateOf<Map<String, StatusMuscularInfo>>(emptyMap()) }
     var dataReferenciaHoje by remember { mutableStateOf(RepositorioTreinoria.obterDataHojeIso()) }
     var habitoHoje by remember {
         mutableStateOf(HabitoDiarioDto(logDate = RepositorioTreinoria.obterDataHojeIso()))
@@ -64,7 +67,6 @@ fun TelaPainelPrincipal(
 
     var exercicioVideoEmbutido by remember { mutableStateOf<ExercicioDto?>(null) }
 
-    // Estado da Verificação Manual de Atualização do App (OTA)
     val (versaoInstaladaCodigo, versaoInstaladaNome) = remember {
         GerenciadorAtualizacaoApp.obterVersaoInstalada(contexto)
     }
@@ -72,20 +74,10 @@ fun TelaPainelPrincipal(
     var infoAtualizacaoManual by remember { mutableStateOf<InfoVersaoRemota?>(null) }
     var mensagemStatusAtualizacao by remember { mutableStateOf<String?>(null) }
 
-    var exibirCheckinIa by remember { mutableStateOf(false) }
-    var energiaNivel by remember { mutableStateOf(8f) }
-    var horasSono by remember { mutableStateOf("7.5") }
-    var dorMuscular by remember { mutableStateOf("Nenhuma") }
-    var respostaCoachIa by remember { mutableStateOf<String?>(null) }
-    var consultandoIa by remember { mutableStateOf(false) }
-
     val atualizarResumoSaude = {
         escopo.launch {
             sincronizandoSaude = true
             resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
-            if (resumoSaude.horasSonoUltimaNoite > 0.0) {
-                horasSono = resumoSaude.horasSonoUltimaNoite.toString()
-            }
             sincronizandoSaude = false
         }
     }
@@ -106,17 +98,14 @@ fun TelaPainelPrincipal(
                 fichas = RepositorioTreinoria.listarFichasTreino()
                 sessoes = RepositorioTreinoria.listarSessoesRecentes(15)
                 habitoHoje = RepositorioTreinoria.obterHabitoHoje()
+                mapaFadigaMuscular = RepositorioTreinoria.calcularMapaFadigaMuscular()
                 resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
-                if (resumoSaude.horasSonoUltimaNoite > 0.0) {
-                    horasSono = resumoSaude.horasSonoUltimaNoite.toString()
-                }
             } finally {
                 carregando = false
             }
         }
     }
 
-    // Sempre que o usuário volta para o app (ON_RESUME) ou vira meia-noite, verifica se o dia mudou e reseta automaticamente!
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -133,7 +122,6 @@ fun TelaPainelPrincipal(
         }
     }
 
-    // Vigilante de virada de dia (00:00) com o app aberto
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000)
@@ -147,14 +135,8 @@ fun TelaPainelPrincipal(
 
     val salvarHabitoDoDia = { novaAgua: Int, novaCreatina: Boolean, novoPre: Boolean, novoPos: Boolean ->
         escopo.launch {
-            val hojeIso = RepositorioTreinoria.obterDataHojeIso()
-            val baseZeradaSeMudouDia = if (habitoHoje.logDate.take(10) == hojeIso) {
-                novaAgua.coerceAtLeast(0)
-            } else {
-                novaAgua.coerceAtLeast(0)
-            }
             habitoHoje = RepositorioTreinoria.atualizarHabitoHoje(
-                waterMl = baseZeradaSeMudouDia,
+                waterMl = novaAgua.coerceAtLeast(0),
                 creatineTaken = novaCreatina,
                 preWorkoutTaken = novoPre,
                 postWorkoutTaken = novoPos,
@@ -204,89 +186,6 @@ fun TelaPainelPrincipal(
             videoUrl = ex.videoUrl!!,
             instrucoes = ex.instructions,
             aoFechar = { exercicioVideoEmbutido = null }
-        )
-    }
-
-    if (exibirCheckinIa) {
-        AlertDialog(
-            onDismissRequest = { exibirCheckinIa = false },
-            title = {
-                Text("🤖 Check-in Pré-Treino Coach IA", fontWeight = FontWeight.Black, fontSize = 18.sp)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Calibre as cargas de hoje com base na sua recuperação (sincronizado com Health Connect):",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text("Energia Hoje: ${energiaNivel.toInt()}/10", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    Slider(
-                        value = energiaNivel,
-                        onValueChange = { energiaNivel = it },
-                        valueRange = 1f..10f,
-                        steps = 8
-                    )
-                    OutlinedTextField(
-                        value = horasSono,
-                        onValueChange = { horasSono = it },
-                        label = { Text("Horas de Sono na última noite") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = dorMuscular,
-                        onValueChange = { dorMuscular = it },
-                        label = { Text("Dor articular/muscular hoje?") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (consultandoIa) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Coach IA analisando ajuste de carga...", fontSize = 12.sp)
-                        }
-                    }
-                    if (respostaCoachIa != null) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = VerdeEsmeralda.copy(alpha = 0.12f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = respostaCoachIa!!,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !consultandoIa,
-                    onClick = {
-                        consultandoIa = true
-                        escopo.launch {
-                            val dadosSmartwatch = if (resumoSaude.permissoesConcedidas) {
-                                "Dados Health Connect: ${resumoSaude.passosHoje} passos hoje, ${resumoSaude.caloriasAtivasKcal} kcal ativas, FC recente: ${resumoSaude.ultimoBatimentoBpm ?: "N/D"} bpm."
-                            } else ""
-                            respostaCoachIa = RepositorioTreinoria.consultarCoachIa(
-                                "Atleta ${perfil?.name ?: ""}, objetivo ${perfil?.goal ?: "Hipertrofia"}. " +
-                                    "Check-in pré-treino: Energia ${energiaNivel.toInt()}/10, Sono ${horasSono}h, Dor: $dorMuscular. $dadosSmartwatch " +
-                                    "Recomende em até 4 linhas o ajuste percentual de carga, RPE alvo e aquecimento para o treino de hoje."
-                            )
-                            consultandoIa = false
-                        }
-                    }
-                ) {
-                    Text("Calibrar Treino com IA")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { exibirCheckinIa = false }) { Text("Fechar") }
-            }
         )
     }
 
@@ -746,26 +645,15 @@ fun TelaPainelPrincipal(
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                            Button(
-                                onClick = { aoIniciarTreinoDaFicha(treinoDoDia) },
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
-                                modifier = Modifier.weight(2f).height(50.dp)
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Iniciar Treino do Dia", fontWeight = FontWeight.Black, fontSize = 14.sp)
-                            }
-                            OutlinedButton(
-                                onClick = { exibirCheckinIa = true },
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.weight(1f).height(50.dp)
-                            ) {
-                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("IA", fontWeight = FontWeight.Bold, color = CianoNeon)
-                            }
+                        Button(
+                            onClick = { aoIniciarTreinoDaFicha(treinoDoDia) },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Iniciar Treino do Dia (com Check-in IA)", fontWeight = FontWeight.Black, fontSize = 14.sp)
                         }
                     }
                 }
@@ -817,7 +705,6 @@ fun TelaPainelPrincipal(
                         color = CianoNeon
                     )
 
-                    // Botões de Água: [-250ml] [+250ml] [+500ml] [Zerar]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -884,7 +771,6 @@ fun TelaPainelPrincipal(
                         }
                     }
 
-                    // Checklist Diário: Creatina + Refeição Pré + Pós-Treino/Whey (Todos resetam diariamente!)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -951,6 +837,11 @@ fun TelaPainelPrincipal(
                     }
                 }
             }
+        }
+
+        // MAPA CORPORAL 2D DE FADIGA & RECUPERAÇÃO MUSCULAR (Idêntico ao Web App!)
+        item {
+            MapaCorporalFadigaCard(mapaStatus = mapaFadigaMuscular)
         }
 
         // Histórico Recente de Sessões

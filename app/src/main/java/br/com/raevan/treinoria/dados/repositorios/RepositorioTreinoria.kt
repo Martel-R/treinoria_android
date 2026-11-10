@@ -4,6 +4,7 @@ import android.content.Context
 import br.com.raevan.treinoria.dados.rede.ClienteSupabase
 import br.com.raevan.treinoria.dados.remoto.dto.*
 import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
+import br.com.raevan.treinoria.nucleo.componentes.MUSCULOS_RASTREADOS
 import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
@@ -19,6 +20,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
 import java.time.DayOfWeek
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -40,8 +43,17 @@ data class EstatisticaExercicioHistorico(
     val maxWeightKg: Double
 )
 
+data class StatusMuscularInfo(
+    val muscleGroup: String,
+    val hoursSinceLastTrained: Long? = null,
+    val weeklySets: Int = 0,
+    val targetSets: Int = 12,
+    val status: String = "ready", // "ready", "recovering", "fatigued"
+    val label: String = "100% Descansado"
+)
+
 data class MensagemChatIa(
-    val role: String, // "user" ou "assistant"
+    val role: String,
     val content: String
 )
 
@@ -220,10 +232,94 @@ object RepositorioTreinoria {
     }
 
     /**
-     * Monta o DOSSIÊ COMPLETO DO ATLETA (Perfil + Medidas Corporais + Hidratação/Suplementos de Hoje +
-     * Refeições Recentes + Dados do Smartwatch Health Connect + Últimas Sessões + Histórico de Cargas/PRs por Exercício)
-     * para que toda interação com a IA (Check-in Pré-Treino e Criação de Fichas) considere 100% dos dados reais do usuário!
+     * Calcula o Mapa Corporal de Fadiga & Recuperação (idêntico ao `MuscleAnalyticsSection.tsx` da Web):
+     * - Verifica as horas desde o último treino de cada grupo muscular (<28h Fadigado, 28-52h Quase Pronto, >52h 100% Pronto)
+     * - Soma o número de séries concluídas nos últimos 7 dias para cada músculo (meta de 12 a 16 séries/semana).
      */
+    suspend fun calcularMapaFadigaMuscular(): Map<String, StatusMuscularInfo> = withContext(Dispatchers.IO) {
+        val resultado = mutableMapOf<String, StatusMuscularInfo>()
+        MUSCULOS_RASTREADOS.forEach { m ->
+            resultado[m] = StatusMuscularInfo(
+                muscleGroup = m,
+                targetSets = if (m in listOf("Pernas", "Costas", "Peito")) 16 else 12
+            )
+        }
+
+        val uid = obterUserIdAtual() ?: return@withContext resultado
+        try {
+            val exercicios = listarExercicios()
+            val mapaEx = exercicios.associateBy { it.id }
+
+            val series = ClienteSupabase.client.from("workout_sets")
+                .select {
+                    filter { eq("user_id", uid) }
+                    order("performed_at", Order.DESCENDING)
+                    limit(500)
+                }
+                .decodeList<SerieSessaoDto>()
+
+            val agora = Instant.now()
+            val seteDiasAtras = agora.minus(Duration.ofDays(7))
+
+            val ultimoTreinoPorMusculo = mutableMapOf<String, Instant>()
+            val seriesUltimos7Dias = mutableMapOf<String, Int>()
+
+            series.filter { it.isCompleted }.forEach { s ->
+                val musculo = mapaEx[s.exerciseId]?.muscleGroup ?: return@forEach
+                if (!resultado.containsKey(musculo)) return@forEach
+
+                val ts = try {
+                    OffsetDateTime.parse(s.performedAt).toInstant()
+                } catch (_: Exception) {
+                    null
+                } ?: return@forEach
+
+                val atualMax = ultimoTreinoPorMusculo[musculo]
+                if (atualMax == null || ts.isAfter(atualMax)) {
+                    ultimoTreinoPorMusculo[musculo] = ts
+                }
+
+                if (!ts.isBefore(seteDiasAtras)) {
+                    seriesUltimos7Dias[musculo] = (seriesUltimos7Dias[musculo] ?: 0) + 1
+                }
+            }
+
+            MUSCULOS_RASTREADOS.forEach { m ->
+                val ultimoTs = ultimoTreinoPorMusculo[m]
+                val setsSemana = seriesUltimos7Dias[m] ?: 0
+                val meta = if (m in listOf("Pernas", "Costas", "Peito")) 16 else 12
+
+                if (ultimoTs != null) {
+                    val horas = Duration.between(ultimoTs, agora).toHours().coerceAtLeast(0)
+                    val (statusStr, labelTxt) = when {
+                        horas < 28 -> "fatigued" to "Em Recuperação (${horas}h atrás)"
+                        horas < 52 -> "recovering" to "Quase Pronto (${horas}h atrás)"
+                        else -> "ready" to "100% Pronto (${horas / 24}d atrás)"
+                    }
+                    resultado[m] = StatusMuscularInfo(
+                        muscleGroup = m,
+                        hoursSinceLastTrained = horas,
+                        weeklySets = setsSemana,
+                        targetSets = meta,
+                        status = statusStr,
+                        label = labelTxt
+                    )
+                } else {
+                    resultado[m] = StatusMuscularInfo(
+                        muscleGroup = m,
+                        hoursSinceLastTrained = null,
+                        weeklySets = setsSemana,
+                        targetSets = meta,
+                        status = "ready",
+                        label = "100% Descansado"
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+
+        resultado
+    }
+
     suspend fun montarDossieCompletoUsuarioParaIa(
         context: Context? = null,
         catalogoExercicios: List<ExercicioDto> = emptyList()
@@ -234,6 +330,7 @@ object RepositorioTreinoria {
         val refeicoes = listarRefeicoesRecentes()
         val sessoes = listarSessoesRecentes(10)
         val estatisticas = obterEstatisticasExercicios()
+        val fadiga = calcularMapaFadigaMuscular()
         val mapaEx = catalogoExercicios.associateBy { it.id }
 
         val saude = if (context != null) {
@@ -245,7 +342,12 @@ object RepositorioTreinoria {
         sb.appendLine("• Nome: ${perfil?.name ?: "Atleta"} | Objetivo: ${perfil?.goal ?: "Hipertrofia & Força"} | Meta Semanal: ${perfil?.weeklyGoal ?: 5}x/semana")
         sb.appendLine("• Peso no Perfil: ${perfil?.weightKg ?: "N/D"} kg | Altura: ${perfil?.heightCm ?: "N/D"} cm")
 
-        sb.appendLine("\n=== 2. MEDIDAS CORPORAIS E COMPOSIÇÃO (ANTROPOMETRIA) ===")
+        sb.appendLine("\n=== 2. MAPA DE FADIGA E RECUPERAÇÃO MUSCULAR ATUAL ===")
+        fadiga.values.forEach { f ->
+            sb.appendLine("• ${f.muscleGroup}: ${f.label} | Volume últimos 7d: ${f.weeklySets}/${f.targetSets} séries")
+        }
+
+        sb.appendLine("\n=== 3. MEDIDAS CORPORAIS E COMPOSIÇÃO (ANTROPOMETRIA) ===")
         val ultimaMedida = medidas.firstOrNull()
         if (ultimaMedida != null) {
             sb.appendLine("• Última Avaliação (${ultimaMedida.measuredAt}): Peso=${ultimaMedida.weightKg ?: "-"}kg, BF=${ultimaMedida.bodyFatPct ?: "-"}%, Peito=${ultimaMedida.chestCm ?: "-"}cm, Cintura=${ultimaMedida.waistCm ?: "-"}cm, Braço=${ultimaMedida.armsCm ?: "-"}cm, Coxa=${ultimaMedida.legsCm ?: "-"}cm")
@@ -253,13 +355,13 @@ object RepositorioTreinoria {
             sb.appendLine("• Sem avaliação antropométrica recente registrada.")
         }
 
-        sb.appendLine("\n=== 3. HIDRATAÇÃO, SUPLEMENTOS E SMARTWATCH HOJE (${obterDataHojeIso()}) ===")
+        sb.appendLine("\n=== 4. HIDRATAÇÃO, SUPLEMENTOS E SMARTWATCH HOJE (${obterDataHojeIso()}) ===")
         sb.appendLine("• Água hoje: ${habitoHoje.waterMl} / ${habitoHoje.waterGoalMl} ml | Creatina hoje: ${if (habitoHoje.creatineTaken) "SIM" else "NÃO"} | Pré-Treino: ${if (habitoHoje.preWorkoutTaken) "SIM" else "NÃO"} | Pós-Treino/Whey: ${if (habitoHoje.postWorkoutTaken) "SIM" else "NÃO"}")
         if (saude != null && saude.permissoesConcedidas) {
             sb.appendLine("• Health Connect / Smartwatch Hoje: Passos=${saude.passosHoje}, Calorias Ativas=${saude.caloriasAtivasKcal} kcal, Último Pulso=${saude.ultimoBatimentoBpm ?: "N/D"} bpm, Sono Última Noite=${saude.horasSonoUltimaNoite}h")
         }
 
-        sb.appendLine("\n=== 4. ÚLTIMAS REFEIÇÕES REGISTRADAS ===")
+        sb.appendLine("\n=== 5. ÚLTIMAS REFEIÇÕES REGISTRADAS ===")
         if (refeicoes.isNotEmpty()) {
             refeicoes.take(4).forEach { r ->
                 sb.appendLine("• [${r.mealType}] ${r.dishName}: ${r.caloriesKcal} kcal (Prot: ${r.proteinG.toInt()}g, Carb: ${r.carbsG.toInt()}g, Gord: ${r.fatG.toInt()}g)")
@@ -268,7 +370,7 @@ object RepositorioTreinoria {
             sb.appendLine("• Sem refeições registradas recentemente.")
         }
 
-        sb.appendLine("\n=== 5. ÚLTIMOS TREINOS CONCLUÍDOS ===")
+        sb.appendLine("\n=== 6. ÚLTIMOS TREINOS CONCLUÍDOS ===")
         if (sessoes.isNotEmpty()) {
             sessoes.take(5).forEach { s ->
                 sb.appendLine("• ${s.startedAt.take(10)}: '${s.title}' (${s.durationMinutes ?: 45} min, Volume Total: ${s.totalVolumeKg.toInt()} kg, Sensação: ${s.feeling ?: "Ótimo"})")
@@ -277,7 +379,7 @@ object RepositorioTreinoria {
             sb.appendLine("• Nenhuma sessão anterior registrada.")
         }
 
-        sb.appendLine("\n=== 6. HISTÓRICO DE CARGAS, REPETIÇÕES E RECORDES (PR) POR EXERCÍCIO ===")
+        sb.appendLine("\n=== 7. HISTÓRICO DE CARGAS, REPETIÇÕES E RECORDES (PR) POR EXERCÍCIO ===")
         if (estatisticas.isNotEmpty()) {
             estatisticas.forEach { (exId, st) ->
                 val nomeEx = mapaEx[exId]?.name ?: exId
@@ -290,10 +392,6 @@ object RepositorioTreinoria {
         sb.toString()
     }
 
-    /**
-     * Check-in Pré-Treino e Adaptação Dinâmica com o Personal Trainer IA (idêntico ao `askAiWorkoutCoach` da Web!),
-     * considerando TODO o dossiê do usuário e retornando os exercícios, séries, repetições e cargas ajustados.
-     */
     suspend fun consultarCheckinPreTreinoIa(
         context: Context?,
         tituloTreino: String,
@@ -313,10 +411,10 @@ object RepositorioTreinoria {
         val systemPrompt = """
             Você é o "TreinorIA Coach", Personal Trainer e Fisiologista do Exercício de elite.
             O atleta acabou de abrir o treino do dia: "$tituloTreino".
-            Analise TODAS AS INFORMAÇÕES DO ATLETA abaixo (Perfil, Medidas Corporais, Hidratação de hoje, Refeições, Dados do Smartwatch Health Connect, Últimas Sessões e Histórico de Cargas/PRs por Exercício) e também o que ele relatou agora sobre alimentação pré-treino, aeróbico/cardio, energia/sono ou pedidos de troca de aparelho.
+            Analise TODAS AS INFORMAÇÕES DO ATLETA abaixo (Perfil, Mapa de Fadiga Muscular, Medidas Corporais, Hidratação de hoje, Refeições, Dados do Smartwatch Health Connect, Últimas Sessões e Histórico de Cargas/PRs por Exercício) e também o que ele relatou agora sobre alimentação pré-treino, aeróbico/cardio, energia/sono ou pedidos de troca de aparelho.
 
             REGRAS DE ADAPTAÇÃO DO TREINO:
-            - Sempre considere o histórico real de cargas, medidas, sono e nutrição do atleta abaixo.
+            - Sempre considere o histórico real de cargas, mapa de fadiga, medidas, sono e nutrição do atleta abaixo.
             - Se ele estiver bem alimentado e descansado, sugira progressão gradual de carga (+1kg a +2.5kg) ou +1-2 repetições nos exercícios em que ele já domina a carga anterior.
             - Se ele relatar que comeu pouco, está em jejum, dormiu mal ou já fez aeróbico intenso antes da musculação, ajuste o ritmo: reduza ligeiramente a carga (-5% a -10%) ou ajuste séries/repetições e descanso para evitar falha precoce.
             - Se ele pedir para incluir, trocar ou remover algum exercício (ou relatar dor articular/aparelho ocupado), atualize a lista `adjusted_blocks` usando EXCLUSIVAMENTE `exercise_id` válidos do CATÁLOGO DE EXERCÍCIOS DISPONÍVEIS abaixo.
@@ -435,10 +533,6 @@ object RepositorioTreinoria {
         )
     }
 
-    /**
-     * Gera uma Ficha de Treino completa com IA (`generateWorkoutPlanWithAi`),
-     * considerando TODAS as informações do usuário (Perfil, Medidas, Histórico de Cargas/PRs, Nutrição, etc.).
-     */
     suspend fun gerarFichaCompletaComIa(
         context: Context?,
         pedidoUsuario: String,
@@ -451,7 +545,7 @@ object RepositorioTreinoria {
 
         val systemPrompt = """
             Você é o "TreinorIA Coach", especialista em periodização e montagem de fichas de musculação personalizadas.
-            Analise TODAS AS INFORMAÇÕES DO ATLETA abaixo (Perfil, Objetivo, Medidas Corporais, Hidratação/Nutrição, Sessões Anteriores e Histórico de Cargas/PRs por Exercício) e o CATÁLOGO DE EXERCÍCIOS para montar uma ficha de treino completa e altamente eficiente conforme o pedido do usuário.
+            Analise TODAS AS INFORMAÇÕES DO ATLETA abaixo (Perfil, Objetivo, Mapa de Fadiga Muscular, Medidas Corporais, Hidratação/Nutrição, Sessões Anteriores e Histórico de Cargas/PRs por Exercício) e o CATÁLOGO DE EXERCÍCIOS para montar uma ficha de treino completa e altamente eficiente conforme o pedido do usuário.
             Use EXCLUSIVAMENTE os `exercise_id` existentes na lista do catálogo abaixo e defina `target_weight_kg` condizente com o histórico real de cargas do atleta!
 
             $dossieCompleto
