@@ -49,7 +49,7 @@ fun EstruturaNavegacaoPrincipal() {
     var fichaAtivaSelecionada by remember { mutableStateOf<FichaTreinoDto?>(null) }
     var roleUsuario by remember {
         mutableStateOf(
-            try { GerenciadorSessao.obterInstancia().obterRoleUsuario() } catch (_: Exception) { "athlete" }
+            try { GerenciadorSessao.obterInstancia().obterRoleSalva() } catch (_: Exception) { "athlete" }
         )
     }
 

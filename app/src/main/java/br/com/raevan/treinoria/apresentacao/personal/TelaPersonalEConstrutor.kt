@@ -37,7 +37,7 @@ fun TelaPersonalEConstrutor() {
     var carregando by remember { mutableStateOf(true) }
 
     val roleSalvoLocal = remember {
-        try { GerenciadorSessao.obterInstancia().obterRoleUsuario() } catch (_: Exception) { "athlete" }
+        try { GerenciadorSessao.obterInstancia().obterRoleSalva() } catch (_: Exception) { "athlete" }
     }
     val ehPersonalOuAcademia = remember(perfil, roleSalvoLocal) {
         val role = (perfil?.accountRole ?: roleSalvoLocal).lowercase()
