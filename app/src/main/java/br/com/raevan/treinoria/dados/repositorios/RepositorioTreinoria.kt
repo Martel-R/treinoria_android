@@ -30,6 +30,12 @@ data class ResultadoScannerPratoIa(
     val aiFeedback: String
 )
 
+data class EstatisticaExercicioHistorico(
+    val lastWeightKg: Double,
+    val lastReps: Int,
+    val maxWeightKg: Double
+)
+
 object RepositorioTreinoria {
 
     fun obterUserIdAtual(): String? {
@@ -135,6 +141,39 @@ object RepositorioTreinoria {
                 .decodeList<ExercicioDto>()
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * Carrega o histórico de séries (`workout_sets`) do usuário para mostrar
+     * "Anterior: Xkg × Y" e o Recorde Pessoal ("PR Xkg") em cada exercício.
+     */
+    suspend fun obterEstatisticasExercicios(): Map<String, EstatisticaExercicioHistorico> = withContext(Dispatchers.IO) {
+        val uid = obterUserIdAtual() ?: return@withContext emptyMap()
+        try {
+            val series = ClienteSupabase.client.from("workout_sets")
+                .select {
+                    filter { eq("user_id", uid) }
+                    order("performed_at", Order.DESCENDING)
+                    limit(400)
+                }
+                .decodeList<SerieSessaoDto>()
+
+            val mapa = mutableMapOf<String, EstatisticaExercicioHistorico>()
+            series.filter { it.isCompleted }.groupBy { it.exerciseId }.forEach { (exId, lista) ->
+                val ultima = lista.firstOrNull()
+                val maxPeso = lista.maxOfOrNull { it.weightKg } ?: 0.0
+                if (ultima != null) {
+                    mapa[exId] = EstatisticaExercicioHistorico(
+                        lastWeightKg = ultima.weightKg,
+                        lastReps = ultima.reps,
+                        maxWeightKg = maxPeso
+                    )
+                }
+            }
+            mapa
+        } catch (_: Exception) {
+            emptyMap()
         }
     }
 
@@ -375,9 +414,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Analisa a FOTO do prato / refeição / suplemento usando o Gemini Vision (`/api/ai/coach`).
-     */
     suspend fun analisarFotoPratoComIa(
         imagemBase64: String,
         tipoRefeicao: String = "Pós-Treino",
