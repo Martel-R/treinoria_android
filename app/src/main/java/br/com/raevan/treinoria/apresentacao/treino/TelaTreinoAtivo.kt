@@ -32,8 +32,7 @@ import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SerieSessaoDto
-import br.com.raevan.treinoria.dados.repositorios.EstatisticaExercicioHistorico
-import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.dados.repositorios.*
 import br.com.raevan.treinoria.nucleo.componentes.PlayerVideoNativoCard
 import br.com.raevan.treinoria.nucleo.notificacoes.GerenciadorNotificacoes
 import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
@@ -72,7 +71,8 @@ data class SerieEditavel(
     val restSeconds: Int = 90,
     val prevWeightKg: Double? = null,
     val prevReps: Int? = null,
-    val maxPrWeightKg: Double? = null
+    val maxPrWeightKg: Double? = null,
+    val aiBadge: String? = null
 )
 
 enum class FaseExecucaoTelaInteira {
@@ -85,6 +85,7 @@ private fun formatarPeso(valor: Double): String {
     return if (valor % 1.0 == 0.0) valor.toInt().toString() else valor.toString()
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TelaTreinoAtivo(
     fichaSelecionada: FichaTreinoDto?,
@@ -101,13 +102,22 @@ fun TelaTreinoAtivo(
     var segundosTreino by remember { mutableStateOf(0) }
     var treinoEmAndamento by remember { mutableStateOf(true) }
 
-    // Modais de Funcionalidades da Web (Coach IA, Trocar Equivalente, Calculadora de Anilhas, Adicionar Exercício, Descartar)
-    var exibirConfirmacaoDescartar by remember { mutableStateOf(false) }
-    var exibirCoachIaModal by remember { mutableStateOf(false) }
-    var perguntaCoachIa by remember { mutableStateOf("Estou pronto! Como devo progredir as cargas neste treino de hoje?") }
-    var respostaCoachIa by remember { mutableStateOf<String?>(null) }
-    var consultandoCoachIa by remember { mutableStateOf(false) }
+    // =========================================================================
+    // CHECK-IN PRÉ-TREINO COM PERSONAL IA (Igual à Web — Abre Automaticamente!)
+    // =========================================================================
+    var exibirCheckinPreTreinoModal by remember { mutableStateOf(true) }
+    var jaMostrouBoasVindasCheckin by remember { mutableStateOf(false) }
+    val mensagensChatPreTreino = remember { mutableStateListOf<MensagemChatIa>() }
+    var chipRefeicaoEscolhido by remember { mutableStateOf("") }
+    var chipCardioEscolhido by remember { mutableStateOf("") }
+    var chipEnergiaEscolhido by remember { mutableStateOf("") }
+    var textoLivreCheckin by remember { mutableStateOf("") }
+    var consultandoCheckinIa by remember { mutableStateOf(false) }
+    var propostaAjusteIa by remember { mutableStateOf<RespostaCheckinPreTreinoIa?>(null) }
+    var resumoIaAplicadoBanner by remember { mutableStateOf<String?>(null) }
 
+    // Demais Modais
+    var exibirConfirmacaoDescartar by remember { mutableStateOf(false) }
     var exercicioIdParaTrocarEquivalente by remember { mutableStateOf<String?>(null) }
     var exibirAdicionarExercicioModal by remember { mutableStateOf(false) }
     var buscaAdicionarExercicio by remember { mutableStateOf("") }
@@ -117,20 +127,17 @@ fun TelaTreinoAtivo(
     var pesoBarraCalculadora by remember { mutableStateOf("20") }
     var nomeExercicioCalculadora by remember { mutableStateOf("") }
 
-    // Seletor Rápido por Toque (Carga ou Repetições)
     var indiceSerieEditandoPeso by remember { mutableStateOf<Int?>(null) }
     var indiceSerieEditandoReps by remember { mutableStateOf<Int?>(null) }
     var aplicarEmTodasAsSeriesDoExercicio by remember { mutableStateOf(true) }
     var valorManualModal by remember { mutableStateOf("") }
 
-    // Qual exercício está com o Player de Vídeo embutido aberto dentro do card
     var exercicioComVideoAbertoId by remember { mutableStateOf<String?>(null) }
 
-    // Configuração de Cadência / Metrônomo
     var presetCadencia by remember { mutableStateOf(CADENCE_PRESETS_ANDROID.first()) }
     var vozAtiva by remember { mutableStateOf(true) }
 
-    // Estado da Tela Inteira Minimalista de Contagem de Repetições -> Descanso -> Próxima Série
+    // Estado da Tela Inteira Minimalista
     var indiceSerieTelaInteira by remember { mutableStateOf<Int?>(null) }
     var faseTelaInteira by remember { mutableStateOf(FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) }
     var repAtualTelaInteira by remember { mutableStateOf(1) }
@@ -139,7 +146,6 @@ fun TelaTreinoAtivo(
     var descansoTotalTelaInteira by remember { mutableStateOf(90) }
     var descansoRestanteTelaInteira by remember { mutableStateOf(0) }
 
-    // Cronômetro de descanso da barra rápida
     var descansoBarraRapida by remember { mutableStateOf(0) }
     var exercicioDescansoBarra by remember { mutableStateOf("") }
 
@@ -150,7 +156,6 @@ fun TelaTreinoAtivo(
 
     val seriesEstado = remember { mutableStateListOf<SerieEditavel>() }
 
-    // Inicializa TTS para Metrônomo por Voz
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(contexto) {
         var instanciaTts: TextToSpeech? = null
@@ -187,6 +192,27 @@ fun TelaTreinoAtivo(
         } else if (fichaAtual != null) {
             val atualizada = lista.find { it.id == fichaAtual?.id }
             if (atualizada != null) fichaAtual = atualizada
+        }
+    }
+
+    // Inicializa a mensagem de boas-vindas do Personal Trainer IA assim que a ficha carrega (igual à Web!)
+    LaunchedEffect(fichaAtual?.name, perfil?.name) {
+        val nomeTreino = fichaAtual?.name ?: return@LaunchedEffect
+        if (!jaMostrouBoasVindasCheckin) {
+            jaMostrouBoasVindasCheckin = true
+            val primeiroNome = perfil?.name?.split(" ")?.firstOrNull() ?: "Atleta"
+            mensagensChatPreTreino.clear()
+            mensagensChatPreTreino.add(
+                MensagemChatIa(
+                    role = "assistant",
+                    content = "Fala, $primeiroNome! 💪 Vi que hoje o seu treino é $nomeTreino e já carreguei todo o seu histórico de cargas, medidas, hidratação e smartwatch.\n\n" +
+                        "Antes de começarmos o 1º exercício, me conta rapidinho:\n" +
+                        "1️⃣ O que você comeu no pré-treino (ou está em jejum)?\n" +
+                        "2️⃣ Já fez ou vai fazer aeróbico/cardio hoje?\n" +
+                        "3️⃣ Como está sua energia/sono ou quer trocar/incluir algum aparelho?\n\n" +
+                        "Com base nisso eu já calibro suas cargas, séries e exercícios de hoje!"
+                )
+            )
         }
     }
 
@@ -238,7 +264,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Cronômetro geral do treino
     LaunchedEffect(treinoEmAndamento) {
         while (treinoEmAndamento) {
             delay(1000)
@@ -246,7 +271,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Cronômetro regressivo de descanso rápido no topo
     LaunchedEffect(descansoBarraRapida) {
         if (descansoBarraRapida > 0) {
             delay(1000)
@@ -258,70 +282,423 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Modal Coach IA durante o Treino Ativo
-    if (exibirCoachIaModal) {
-        AlertDialog(
-            onDismissRequest = { exibirCoachIaModal = false },
-            title = {
-                Text("🤖 Coach IA • Ajuste em Tempo Real", fontWeight = FontWeight.Black, fontSize = 17.sp)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Pergunte sobre substituição de aparelho, ajuste de carga, dor articular ou técnica para o treino '${fichaAtual?.name ?: ""}':",
-                        fontSize = 12.sp,
-                        color = TextoSecundario
-                    )
-                    OutlinedTextField(
-                        value = perguntaCoachIa,
-                        onValueChange = { perguntaCoachIa = it },
-                        label = { Text("Sua dúvida para o Coach IA") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (consultandoCoachIa) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Analisando biomecânica e cargas...", fontSize = 12.sp)
-                        }
-                    }
-                    if (respostaCoachIa != null) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = VerdeEsmeralda.copy(alpha = 0.14f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = respostaCoachIa!!,
-                                fontSize = 12.sp,
-                                color = TextoPrimario,
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !consultandoCoachIa && perguntaCoachIa.isNotBlank(),
-                    onClick = {
-                        consultandoCoachIa = true
-                        escopo.launch {
-                            val exLista = seriesEstado.map { it.exerciseName }.distinct().joinToString(", ")
-                            respostaCoachIa = RepositorioTreinoria.consultarCoachIa(
-                                "Treino atual: ${fichaAtual?.name ?: ""}. Exercícios: $exLista. Dúvida do atleta: $perguntaCoachIa"
-                            )
-                            consultandoCoachIa = false
-                        }
-                    }
+    // =========================================================================
+    // MODAL DE CHECK-IN PRÉ-TREINO COM PERSONAL IA (IGUAL AO WEB APP!)
+    // =========================================================================
+    if (exibirCheckinPreTreinoModal) {
+        Dialog(
+            onDismissRequest = { exibirCheckinPreTreinoModal = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp, vertical = 18.dp),
+                shape = RoundedCornerShape(24.dp),
+                color = SuperficieCard
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Consultar IA", fontWeight = FontWeight.Black)
+                    // Topo do Check-in IA
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(VerdeEsmeralda),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = FundoAcademia)
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Personal Trainer IA • Check-in do Dia",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 15.sp,
+                                    color = TextoPrimario
+                                )
+                                Text(
+                                    text = "Adapta cargas, séries, reps e exercícios usando todo o seu histórico",
+                                    fontSize = 11.sp,
+                                    color = TextoSecundario
+                                )
+                            }
+                        }
+                        TextButton(onClick = { exibirCheckinPreTreinoModal = false }) {
+                            Text("Pular ✕", fontWeight = FontWeight.Bold, color = TextoSecundario)
+                        }
+                    }
+
+                    HorizontalDivider(color = BordaCard.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 8.dp))
+
+                    // Área Central Rolável: Mensagens + Chips Rápidos + Proposta de Ajuste
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(mensagensChatPreTreino) { msg ->
+                            val ehUser = msg.role == "user"
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = if (ehUser) Arrangement.End else Arrangement.Start
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (ehUser) VerdeEsmeralda else FundoAcademia,
+                                    modifier = Modifier.widthIn(max = 310.dp)
+                                ) {
+                                    Text(
+                                        text = msg.content,
+                                        fontSize = 13.sp,
+                                        color = if (ehUser) FundoAcademia else TextoPrimario,
+                                        fontWeight = if (ehUser) FontWeight.Bold else FontWeight.Normal,
+                                        modifier = Modifier.padding(12.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (consultandoCheckinIa) {
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = FundoAcademia,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = VerdeEsmeralda,
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Text(
+                                            text = "Analisando seu histórico completo, medidas, sono, nutrição e recalibrando séries...",
+                                            fontSize = 12.sp,
+                                            color = VerdeEsmeraldaClaro
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Chips Rápidos de 1 Toque (Igual ao Web App!)
+                        if (mensagensChatPreTreino.size <= 1 && !consultandoCheckinIa) {
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = FundoAcademia,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "⚡ RESPOSTA RÁPIDA (Toque para marcar ou digite abaixo):",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = CianoNeon
+                                        )
+
+                                        Text("🍽️ 1. Alimentação Pré-Treino:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            listOf(
+                                                "Refeição completa (Carbo + Proteína)",
+                                                "Lanche leve / Banana / Café",
+                                                "Treinando em Jejum",
+                                                "Comi pouco / Correria"
+                                            ).forEach { opt ->
+                                                FilterChip(
+                                                    selected = chipRefeicaoEscolhido == opt,
+                                                    onClick = { chipRefeicaoEscolhido = if (chipRefeicaoEscolhido == opt) "" else opt },
+                                                    label = { Text(opt, fontSize = 11.sp) }
+                                                )
+                                            }
+                                        }
+
+                                        Text("🏃 2. Aeróbico / Cardio Hoje:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            listOf(
+                                                "Não fiz aeróbico antes",
+                                                "Já fiz 20-30min de cardio antes",
+                                                "Já fiz cardio intenso hoje",
+                                                "Vou fazer 20min de cardio no pós-treino"
+                                            ).forEach { opt ->
+                                                FilterChip(
+                                                    selected = chipCardioEscolhido == opt,
+                                                    onClick = { chipCardioEscolhido = if (chipCardioEscolhido == opt) "" else opt },
+                                                    label = { Text(opt, fontSize = 11.sp) }
+                                                )
+                                            }
+                                        }
+
+                                        Text("🔋 3. Energia & Disposição:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            listOf(
+                                                "100% descansado (Quero progredir carga!)",
+                                                "Energia normal",
+                                                "Dormi pouco / Cansado",
+                                                "Treino rápido (40 min)"
+                                            ).forEach { opt ->
+                                                FilterChip(
+                                                    selected = chipEnergiaEscolhido == opt,
+                                                    onClick = { chipEnergiaEscolhido = if (chipEnergiaEscolhido == opt) "" else opt },
+                                                    label = { Text(opt, fontSize = 11.sp) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Pré-visualização do Plano Adaptado pela IA + Botão de Aplicar no Treino
+                        if (propostaAjusteIa != null) {
+                            val prop = propostaAjusteIa!!
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = VerdeEsmeralda.copy(alpha = 0.12f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(14.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "🏋️ PLANO ADAPTADO (${prop.adjustedBlocks.size} exercícios)",
+                                                fontWeight = FontWeight.Black,
+                                                fontSize = 12.sp,
+                                                color = VerdeEsmeralda
+                                            )
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = VerdeEsmeralda.copy(alpha = 0.25f)
+                                            ) {
+                                                Text(
+                                                    text = "Prontidão: ${prop.readinessScore}%",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Black,
+                                                    color = VerdeEsmeraldaClaro,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "🎯 ${prop.workoutSummaryAdvice}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextoPrimario
+                                        )
+
+                                        prop.adjustedBlocks.forEachIndexed { idx, b ->
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = FundoAcademia,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(10.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = "${idx + 1}. ${b.exerciseName}",
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 12.sp
+                                                        )
+                                                        if (b.changeBadge.isNotBlank()) {
+                                                            Text(
+                                                                text = "✨ ${b.changeBadge}",
+                                                                fontSize = 10.sp,
+                                                                color = VerdeEsmeraldaClaro,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+                                                    }
+                                                    Text(
+                                                        text = "${b.targetSets}×${b.targetReps} • ${formatarPeso(b.targetWeightKg)}kg",
+                                                        fontWeight = FontWeight.Black,
+                                                        fontSize = 12.sp,
+                                                        color = CianoNeon
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                val mapaCatalogo = catalogoExercicios.associateBy { it.id }
+                                                seriesEstado.clear()
+                                                prop.adjustedBlocks.forEach { b ->
+                                                    val exCat = mapaCatalogo[b.exerciseId]
+                                                        ?: catalogoExercicios.firstOrNull {
+                                                            it.name.equals(b.exerciseName, ignoreCase = true)
+                                                        }
+                                                    val realExId = exCat?.id ?: b.exerciseId
+                                                    val hist = estatisticasExercicios[realExId]
+                                                    val repsNum = b.targetReps.split("-").lastOrNull()?.filter { it.isDigit() }?.ifBlank { "10" } ?: "10"
+                                                    for (s in 1..b.targetSets.coerceIn(1, 8)) {
+                                                        seriesEstado.add(
+                                                            SerieEditavel(
+                                                                exerciseId = realExId,
+                                                                exerciseName = exCat?.name ?: b.exerciseName,
+                                                                muscleGroup = exCat?.muscleGroup ?: "Musculação",
+                                                                equipment = exCat?.equipment ?: "Aparelho / Livre",
+                                                                videoUrl = exCat?.videoUrl,
+                                                                instructions = b.notes.ifBlank { exCat?.instructions },
+                                                                targetRepsRange = b.targetReps,
+                                                                setNumber = s,
+                                                                weightKg = formatarPeso(b.targetWeightKg),
+                                                                reps = repsNum,
+                                                                restSeconds = b.restSeconds.takeIf { it > 0 } ?: 90,
+                                                                prevWeightKg = hist?.lastWeightKg,
+                                                                prevReps = hist?.lastReps,
+                                                                maxPrWeightKg = hist?.maxWeightKg,
+                                                                aiBadge = b.changeBadge
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                                resumoIaAplicadoBanner = "✨ ${prop.workoutSummaryAdvice} (Prontidão ${prop.readinessScore}%)"
+                                                exibirCheckinPreTreinoModal = false
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                                        ) {
+                                            Icon(Icons.Default.CheckCircle, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                "Aplicar Cargas, Séries e Exercícios no Treino",
+                                                fontWeight = FontWeight.Black,
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Barra de envio de mensagem no rodapé do modal
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = textoLivreCheckin,
+                            onValueChange = { textoLivreCheckin = it },
+                            placeholder = {
+                                Text(
+                                    if (chipRefeicaoEscolhido.isNotBlank() || chipCardioEscolhido.isNotBlank() || chipEnergiaEscolhido.isNotBlank())
+                                        "Algo mais? (ex: troca supino por halteres)..."
+                                    else
+                                        "Conte o que comeu, cardio ou peça ajustes...",
+                                    fontSize = 12.sp
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        val podeEnviar = !consultandoCheckinIa &&
+                            (textoLivreCheckin.isNotBlank() || chipRefeicaoEscolhido.isNotBlank() || chipCardioEscolhido.isNotBlank() || chipEnergiaEscolhido.isNotBlank())
+
+                        Button(
+                            enabled = podeEnviar,
+                            onClick = {
+                                val partes = mutableListOf<String>()
+                                if (chipRefeicaoEscolhido.isNotBlank()) partes.add("Alimentação pré-treino: $chipRefeicaoEscolhido.")
+                                if (chipCardioEscolhido.isNotBlank()) partes.add("Aeróbico hoje: $chipCardioEscolhido.")
+                                if (chipEnergiaEscolhido.isNotBlank()) partes.add("Nível de energia: $chipEnergiaEscolhido.")
+                                if (textoLivreCheckin.isNotBlank()) partes.add(textoLivreCheckin.trim())
+
+                                val msgFinal = partes.joinToString(" ")
+                                val copiaHistorico = mensagensChatPreTreino.toList()
+                                mensagensChatPreTreino.add(MensagemChatIa("user", msgFinal))
+                                textoLivreCheckin = ""
+                                chipRefeicaoEscolhido = ""
+                                chipCardioEscolhido = ""
+                                chipEnergiaEscolhido = ""
+                                consultandoCheckinIa = true
+
+                                val blocosAtuais = seriesEstado.groupBy { it.exerciseId }.map { (exId, lista) ->
+                                    val prim = lista.first()
+                                    BlocoExercicioAjustadoIa(
+                                        exerciseId = exId,
+                                        exerciseName = prim.exerciseName,
+                                        targetSets = lista.size,
+                                        targetReps = prim.targetRepsRange,
+                                        targetWeightKg = prim.weightKg.toDoubleOrNull() ?: 20.0,
+                                        restSeconds = prim.restSeconds,
+                                        notes = prim.instructions ?: "",
+                                        changeBadge = "Atual"
+                                    )
+                                }
+
+                                escopo.launch {
+                                    val resp = RepositorioTreinoria.consultarCheckinPreTreinoIa(
+                                        context = contexto,
+                                        tituloTreino = fichaAtual?.name ?: "Treino do Dia",
+                                        blocosAtuais = blocosAtuais,
+                                        catalogoExercicios = catalogoExercicios,
+                                        historicoChat = copiaHistorico,
+                                        mensagemAtleta = msgFinal
+                                    )
+                                    mensagensChatPreTreino.add(MensagemChatIa("assistant", resp.replyMessage))
+                                    propostaAjusteIa = resp
+                                    consultandoCheckinIa = false
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                            modifier = Modifier.height(52.dp)
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "Enviar")
+                        }
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { exibirCoachIaModal = false }) { Text("Fechar") }
             }
-        )
+        }
     }
 
     // Modal Trocar por Exercício Equivalente (mesmo grupo muscular)
@@ -1146,7 +1523,7 @@ fun TelaTreinoAtivo(
 
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             FilledTonalButton(
-                                onClick = { exibirCoachIaModal = true },
+                                onClick = { exibirCheckinPreTreinoModal = true },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                             ) {
                                 Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(15.dp))
@@ -1159,6 +1536,22 @@ fun TelaTreinoAtivo(
                             ) {
                                 Icon(Icons.Default.DeleteOutline, contentDescription = "Descartar", tint = VermelhoAlerta, modifier = Modifier.size(20.dp))
                             }
+                        }
+                    }
+
+                    if (resumoIaAplicadoBanner != null) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = VerdeEsmeralda.copy(alpha = 0.16f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = resumoIaAplicadoBanner!!,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = VerdeEsmeraldaClaro,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
                         }
                     }
 
@@ -1302,6 +1695,7 @@ fun TelaTreinoAtivo(
             val equipamento = primeiro?.equipment ?: ""
             val instrucoes = primeiro?.instructions
             val prMaximo = primeiro?.maxPrWeightKg
+            val aiBadge = primeiro?.aiBadge
             val feitasCount = seriesDoExercicio.count { it.completed }
             val videoAbertoNesteCard = exercicioComVideoAbertoId == exId
 
@@ -1367,6 +1761,15 @@ fun TelaTreinoAtivo(
                                     fontSize = 16.sp,
                                     color = TextoPrimario
                                 )
+
+                                if (!aiBadge.isNullOrBlank()) {
+                                    Text(
+                                        text = "🤖 Ajuste IA: $aiBadge",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CianoNeon
+                                    )
+                                }
 
                                 Text(
                                     text = "Meta: ${seriesDoExercicio.size} séries × ${primeiro?.targetRepsRange ?: "8-12"} reps • Descanso: ${primeiro?.restSeconds ?: 90}s",
@@ -1501,7 +1904,6 @@ fun TelaTreinoAtivo(
                             )
                         }
 
-                        // Lista de Séries deste Exercício: CADA SÉRIE TEM 2 LINHAS LARGAS
                         seriesDoExercicio.forEach { serie ->
                             val idxGlobal = seriesEstado.indexOf(serie)
                             Surface(
@@ -1926,7 +2328,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Finalizar ou Descartar Treino do Dia (Salva no Supabase + Grava no Health Connect / Google Fit!)
+        // Finalizar ou Descartar Treino do Dia
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -1971,7 +2373,6 @@ fun TelaTreinoAtivo(
                                     seriesConcluidas = concluidas
                                 )
 
-                                // Sincroniza automaticamente a sessão de Musculação + Calorias no Health Connect (Google Fit / Samsung Health)
                                 val gravouHealth = GerenciadorHealthConnect.gravarTreinoConcluido(
                                     context = contexto,
                                     tituloTreino = fichaAtual?.name ?: "Treino de Musculação",

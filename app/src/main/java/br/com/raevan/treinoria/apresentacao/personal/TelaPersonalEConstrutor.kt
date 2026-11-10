@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -27,10 +28,11 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun TelaPersonalEConstrutor() {
+    val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
     var perfil by remember { mutableStateOf<PerfilDto?>(null) }
-    var abaSelecionada by remember { mutableStateOf(0) } // 0 = Minhas Fichas & Construtor, 1 = Carteira Personal (apenas para trainer/gym/admin)
+    var abaSelecionada by remember { mutableStateOf(0) }
     var alunos by remember { mutableStateOf<List<VinculoAlunoPersonalDto>>(emptyList()) }
     var minhasFichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(emptyList()) }
@@ -44,14 +46,23 @@ fun TelaPersonalEConstrutor() {
         role == "trainer" || role == "gym" || role == "admin"
     }
 
-    // Modal Criar Nova Ficha (Para Mim ou Para Aluno)
+    // Modal Criar Nova Ficha (Com Gerador Inteligente por IA que lê TODO o histórico do usuário!)
     var exibirModalNovaFicha by remember { mutableStateOf(false) }
     var alunoAlvoPrescricao by remember { mutableStateOf<VinculoAlunoPersonalDto?>(null) }
+    var promptGeradorIaFicha by remember {
+        mutableStateOf("Monte um treino de Costas e Bíceps focado em hipertrofia e largura dorsal para Terça e Sexta")
+    }
+    var gerandoFichaComIa by remember { mutableStateOf(false) }
+    var explicacaoIaFicha by remember { mutableStateOf<String?>(null) }
+
     var tituloFicha by remember { mutableStateOf("Treino A • Peito, Ombro e Tríceps") }
     var subtituloFicha by remember { mutableStateOf("Hipertrofia Miofibrilar") }
     var diaSemanaFicha by remember { mutableStateOf("Segunda / Quinta") }
+    var preTreinoSugeridoIa by remember { mutableStateOf("") }
+    var posTreinoSugeridoIa by remember { mutableStateOf("") }
     var buscaExercicioModal by remember { mutableStateOf("") }
     val exerciciosEscolhidosIds = remember { mutableStateListOf<String>() }
+    val pesosSugeridosPorExercicio = remember { mutableStateMapOf<String, Double>() }
     var salvandoFicha by remember { mutableStateOf(false) }
     var feedbackMensagem by remember { mutableStateOf<String?>(null) }
 
@@ -174,20 +185,98 @@ fun TelaPersonalEConstrutor() {
             onDismissRequest = { exibirModalNovaFicha = false },
             title = {
                 Text(
-                    text = if (alunoAlvoPrescricao != null) "Prescrever Ficha p/ ${alunoAlvoPrescricao!!.studentName}" else "Nova Ficha de Treino",
+                    text = if (alunoAlvoPrescricao != null) "Prescrever Ficha p/ ${alunoAlvoPrescricao!!.studentName}" else "Montar Ficha (Manual ou Coach IA)",
                     fontWeight = FontWeight.Black,
-                    fontSize = 17.sp
+                    fontSize = 16.sp
                 )
             },
             text = {
                 Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 490.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Box do Gerador por IA considerando todas as informações do usuário!
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = VerdeEsmeralda.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "🤖 Gerar Ficha com IA (Analisa seu Perfil, Medidas, PRs e Histórico)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                color = VerdeEsmeralda
+                            )
+                            OutlinedTextField(
+                                value = promptGeradorIaFicha,
+                                onValueChange = { promptGeradorIaFicha = it },
+                                label = { Text("Peça à IA (ex: Treino de Pernas completo p/ Quarta)", fontSize = 11.sp) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Button(
+                                enabled = !gerandoFichaComIa && promptGeradorIaFicha.isNotBlank(),
+                                onClick = {
+                                    gerandoFichaComIa = true
+                                    explicacaoIaFicha = null
+                                    escopo.launch {
+                                        val gerada = RepositorioTreinoria.gerarFichaCompletaComIa(
+                                            context = contexto,
+                                            pedidoUsuario = promptGeradorIaFicha,
+                                            catalogoExercicios = catalogoExercicios
+                                        )
+                                        if (gerada != null) {
+                                            tituloFicha = gerada.planName
+                                            subtituloFicha = gerada.description
+                                            diaSemanaFicha = gerada.dayOfWeek
+                                            preTreinoSugeridoIa = gerada.preWorkoutMeal
+                                            posTreinoSugeridoIa = gerada.postWorkoutMeal
+                                            explicacaoIaFicha = gerada.replyMessage
+                                            exerciciosEscolhidosIds.clear()
+                                            pesosSugeridosPorExercicio.clear()
+                                            gerada.items.forEach { itIa ->
+                                                val existe = catalogoExercicios.any { c -> c.id == itIa.exerciseId }
+                                                if (existe && !exerciciosEscolhidosIds.contains(itIa.exerciseId)) {
+                                                    exerciciosEscolhidosIds.add(itIa.exerciseId)
+                                                    pesosSugeridosPorExercicio[itIa.exerciseId] = itIa.targetWeightKg
+                                                }
+                                            }
+                                        }
+                                        gerandoFichaComIa = false
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            ) {
+                                if (gerandoFichaComIa) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("IA analisando perfil e montando ficha...", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                } else {
+                                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Preencher Ficha Automaticamente com IA", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                }
+                            }
+                            if (explicacaoIaFicha != null) {
+                                Text(
+                                    text = "💡 ${explicacaoIaFicha!!}",
+                                    fontSize = 11.sp,
+                                    color = VerdeEsmeraldaClaro
+                                )
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = tituloFicha,
                         onValueChange = { tituloFicha = it },
-                        label = { Text("Título da Ficha (ex: Treino A - Push)") },
+                        label = { Text("Título da Ficha") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -268,7 +357,10 @@ fun TelaPersonalEConstrutor() {
                                 titulo = tituloFicha,
                                 subtitulo = subtituloFicha,
                                 diaSemana = diaSemanaFicha,
-                                exerciciosSelecionados = triplas
+                                preWorkoutMeal = preTreinoSugeridoIa,
+                                postWorkoutMeal = posTreinoSugeridoIa,
+                                exerciciosSelecionados = triplas,
+                                pesosAlvo = pesosSugeridosPorExercicio.toMap()
                             )
 
                             val foneAluno = alunoAlvoPrescricao?.studentWhatsapp
@@ -312,8 +404,6 @@ fun TelaPersonalEConstrutor() {
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // Se for Personal Trainer, mostra a chave entre Minhas Fichas e Carteira Personal.
-        // Se for Aluno / Assinante Comum, NÃO mostra a aba de Carteira Personal!
         if (ehPersonalOuAcademia) {
             item {
                 Row(
@@ -369,15 +459,16 @@ fun TelaPersonalEConstrutor() {
                     onClick = {
                         alunoAlvoPrescricao = null
                         exerciciosEscolhidosIds.clear()
+                        explicacaoIaFicha = null
                         exibirModalNovaFicha = true
                     },
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
                     modifier = Modifier.fillMaxWidth().height(50.dp)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Montar Nova Ficha de Treino (A/B/C/D)", fontWeight = FontWeight.Black)
+                    Text("Montar Nova Ficha (Coach IA ou Manual)", fontWeight = FontWeight.Black)
                 }
             }
 
@@ -423,7 +514,6 @@ fun TelaPersonalEConstrutor() {
                 }
             }
         } else if (ehPersonalOuAcademia) {
-            // Aba 1: Carteira Multi-Alunos exclusiva do Personal Trainer
             item {
                 Button(
                     onClick = { exibirModalNovoAluno = true },
