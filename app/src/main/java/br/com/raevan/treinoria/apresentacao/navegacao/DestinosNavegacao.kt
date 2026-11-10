@@ -13,7 +13,6 @@ sealed class DestinoNavegacao(
     object DesbloqueioBiometrico : DestinoNavegacao("desbloqueio_biometrico", "Desbloqueio", Icons.Default.Fingerprint)
     object Painel : DestinoNavegacao("painel", "Início", Icons.Default.Home)
     object TreinoAtivo : DestinoNavegacao("treino_ativo", "Treinar", Icons.Default.FitnessCenter)
-    object Catalogo : DestinoNavegacao("catalogo", "Exercícios", Icons.Default.PlayCircleOutline)
     object NutricaoEvolucao : DestinoNavegacao("nutricao_evolucao", "Nutri & Corpo", Icons.Default.Restaurant)
     object PersonalHub : DestinoNavegacao("personal_hub", "Personal & Fichas", Icons.Default.Groups)
 
@@ -21,7 +20,6 @@ sealed class DestinoNavegacao(
         val itensBarraInferior = listOf(
             Painel,
             TreinoAtivo,
-            Catalogo,
             NutricaoEvolucao,
             PersonalHub
         )

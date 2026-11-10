@@ -58,7 +58,7 @@ fun TelaNutricaoEvolucao() {
         recarregar()
     }
 
-    val kcalHoje = remember(refeicoes) { refeicoes.take(5).sumOf { it.calories } }
+    val kcalHoje = remember(refeicoes) { refeicoes.take(5).sumOf { it.caloriesKcal } }
     val proteinaHoje = remember(refeicoes) { refeicoes.take(5).sumOf { it.proteinG }.toInt() }
 
     LazyColumn(
@@ -188,8 +188,8 @@ fun TelaNutricaoEvolucao() {
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(ref.mealTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                            Text("${ref.calories} kcal", fontWeight = FontWeight.Black, color = AmbarDestaque, fontSize = 14.sp)
+                            Text(ref.dishName, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Text("${ref.caloriesKcal} kcal", fontWeight = FontWeight.Black, color = AmbarDestaque, fontSize = 14.sp)
                         }
                         Text(
                             "🥩 Prot: ${ref.proteinG.toInt()}g • 🍚 Carb: ${ref.carbsG.toInt()}g • 🥑 Gord: ${ref.fatG.toInt()}g",
@@ -308,7 +308,7 @@ fun TelaNutricaoEvolucao() {
                         Column {
                             Text("Data: ${m.measuredAt}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
-                                "Braço: ${m.armCm ?: "-"}cm • Cintura: ${m.waistCm ?: "-"}cm • Peito: ${m.chestCm ?: "-"}cm",
+                                "Braço: ${m.armsCm ?: "-"}cm • Cintura: ${m.waistCm ?: "-"}cm • Peito: ${m.chestCm ?: "-"}cm",
                                 fontSize = 11.sp,
                                 color = TextoSecundario
                             )

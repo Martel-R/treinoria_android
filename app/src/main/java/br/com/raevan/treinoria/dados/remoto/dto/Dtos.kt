@@ -22,14 +22,15 @@ data class PerfilDto(
     @SerialName("assigned_trainer_id") val assignedTrainerId: String? = null,
     @SerialName("weight_kg") val weightKg: Double? = null,
     @SerialName("height_cm") val heightCm: Double? = null,
-    val goal: String = "Hipertrofia & Força",
-    @SerialName("weekly_goal") val weeklyGoal: Int = 4,
-    @SerialName("water_goal_ml") val waterGoalMl: Int = 3000
+    val goal: String = "Hipertrofia",
+    @SerialName("weekly_goal_days") val weeklyGoal: Int = 5,
+    @SerialName("default_rest_seconds") val defaultRestSeconds: Int = 90
 )
 
 @Serializable
 data class ExercicioDto(
     val id: String = "",
+    @SerialName("user_id") val userId: String? = null,
     val name: String = "",
     @SerialName("muscle_group") val muscleGroup: String = "",
     val equipment: String = "Barra",
@@ -40,14 +41,14 @@ data class ExercicioDto(
 )
 
 @Serializable
-data class TemplateExercicioDto(
+data class ItemFichaTreinoDto(
     val id: String = "",
-    @SerialName("template_id") val templateId: String = "",
+    @SerialName("plan_id") val planId: String = "",
     @SerialName("exercise_id") val exerciseId: String = "",
     @SerialName("sort_order") val sortOrder: Int = 1,
-    @SerialName("target_sets") val targetSets: Int = 3,
+    @SerialName("target_sets") val targetSets: Int = 4,
     @SerialName("target_reps") val targetReps: String = "8-12",
-    @SerialName("target_weight_kg") val targetWeightKg: Double = 0.0,
+    @SerialName("target_weight_kg") val targetWeightKg: Double? = null,
     @SerialName("rest_seconds") val restSeconds: Int = 90,
     val notes: String? = null,
     val exercise: ExercicioDto? = null
@@ -57,39 +58,42 @@ data class TemplateExercicioDto(
 data class FichaTreinoDto(
     val id: String = "",
     @SerialName("user_id") val userId: String = "",
-    val title: String = "",
-    val subtitle: String? = null,
-    @SerialName("accent_color") val accentColor: String = "#10b981",
+    val name: String = "",
+    val description: String? = null,
+    val color: String = "#10b981",
     @SerialName("day_of_week") val dayOfWeek: String? = null,
-    @SerialName("sort_order") val sortOrder: Int = 1,
-    @SerialName("template_exercises") val templateExercises: List<TemplateExercicioDto> = emptyList()
+    @SerialName("pre_workout_meal") val preWorkoutMeal: String? = null,
+    @SerialName("post_workout_meal") val postWorkoutMeal: String? = null,
+    @SerialName("prescribed_by_name") val prescribedByName: String? = null,
+    @SerialName("is_active") val isActive: Boolean = true,
+    val items: List<ItemFichaTreinoDto> = emptyList()
 )
 
 @Serializable
 data class SerieSessaoDto(
     val id: String? = null,
     @SerialName("session_id") val sessionId: String = "",
+    @SerialName("user_id") val userId: String? = null,
     @SerialName("exercise_id") val exerciseId: String = "",
     @SerialName("set_number") val setNumber: Int = 1,
     @SerialName("weight_kg") val weightKg: Double = 0.0,
     val reps: Int = 10,
     val rpe: Double? = null,
     @SerialName("is_warmup") val isWarmup: Boolean = false,
-    val completed: Boolean = true
+    @SerialName("is_completed") val isCompleted: Boolean = true
 )
 
 @Serializable
 data class SessaoTreinoDto(
     val id: String = "",
     @SerialName("user_id") val userId: String = "",
-    @SerialName("template_id") val templateId: String? = null,
+    @SerialName("plan_id") val planId: String? = null,
     val title: String = "",
     @SerialName("started_at") val startedAt: String = "",
     @SerialName("finished_at") val finishedAt: String? = null,
-    @SerialName("duration_seconds") val durationSeconds: Int = 0,
+    @SerialName("duration_minutes") val durationMinutes: Int? = null,
     @SerialName("total_volume_kg") val totalVolumeKg: Double = 0.0,
-    @SerialName("total_sets") val totalSets: Int = 0,
-    val feeling: String? = "Forte 🔥",
+    val feeling: String? = "Ótimo",
     val notes: String? = null
 )
 
@@ -99,7 +103,10 @@ data class HabitoDiarioDto(
     @SerialName("user_id") val userId: String = "",
     @SerialName("log_date") val logDate: String = "",
     @SerialName("water_ml") val waterMl: Int = 0,
+    @SerialName("water_goal_ml") val waterGoalMl: Int = 3000,
     @SerialName("creatine_taken") val creatineTaken: Boolean = false,
+    @SerialName("pre_workout_taken") val preWorkoutTaken: Boolean = false,
+    @SerialName("post_workout_taken") val postWorkoutTaken: Boolean = false,
     @SerialName("sleep_hours") val sleepHours: Double? = null
 )
 
@@ -107,8 +114,9 @@ data class HabitoDiarioDto(
 data class RefeicaoLogDto(
     val id: String = "",
     @SerialName("user_id") val userId: String = "",
-    @SerialName("meal_title") val mealTitle: String = "",
-    val calories: Int = 0,
+    @SerialName("meal_type") val mealType: String = "Almoço / Pós-Treino",
+    @SerialName("dish_name") val dishName: String = "",
+    @SerialName("calories_kcal") val caloriesKcal: Int = 0,
     @SerialName("protein_g") val proteinG: Double = 0.0,
     @SerialName("carbs_g") val carbsG: Double = 0.0,
     @SerialName("fat_g") val fatG: Double = 0.0,
@@ -125,8 +133,8 @@ data class MedidaCorporalDto(
     @SerialName("body_fat_pct") val bodyFatPct: Double? = null,
     @SerialName("chest_cm") val chestCm: Double? = null,
     @SerialName("waist_cm") val waistCm: Double? = null,
-    @SerialName("arm_cm") val armCm: Double? = null,
-    @SerialName("thigh_cm") val thighCm: Double? = null,
+    @SerialName("arms_cm") val armsCm: Double? = null,
+    @SerialName("legs_cm") val legsCm: Double? = null,
     val notes: String? = null
 )
 
@@ -137,8 +145,8 @@ data class VinculoAlunoPersonalDto(
     @SerialName("student_id") val studentId: String? = null,
     @SerialName("student_name") val studentName: String = "",
     @SerialName("student_email") val studentEmail: String? = null,
-    @SerialName("student_phone") val studentPhone: String? = null,
-    val goal: String = "Hipertrofia",
+    @SerialName("student_whatsapp") val studentWhatsapp: String? = null,
+    @SerialName("student_goal") val studentGoal: String = "Hipertrofia",
     val status: String = "active",
     val notes: String? = null
 )

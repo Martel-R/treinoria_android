@@ -6,13 +6,9 @@ import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.json.JSONArray
@@ -55,8 +51,12 @@ object RepositorioTreinoria {
     }
 
     suspend fun garantirDadosIniciaisUsuario(): Unit = withContext(Dispatchers.IO) {
+        val uid = obterUserIdAtual() ?: return@withContext
         try {
-            ClienteSupabase.client.postgrest.rpc("seed_default_user_workouts")
+            val params = buildJsonObject {
+                put("p_user_id", uid)
+            }
+            ClienteSupabase.client.postgrest.rpc("seed_default_plans_for_user", params)
         } catch (_: Exception) {}
     }
 
@@ -73,19 +73,38 @@ object RepositorioTreinoria {
         }
     }
 
+    /**
+     * Carrega `workout_plans` + `workout_plan_items` + `exercises`, exatamente como a Web (`src/App.tsx`).
+     */
     suspend fun listarFichasTreino(targetUserId: String? = null): List<FichaTreinoDto> = withContext(Dispatchers.IO) {
         val uid = targetUserId ?: obterUserIdAtual() ?: return@withContext emptyList()
         try {
-            val cols = Columns.raw("*, template_exercises(*, exercise:exercises(*))")
-            val fichas = ClienteSupabase.client.from("workout_templates")
-                .select(columns = cols) {
+            val exercicios = listarExercicios()
+            val mapaExercicios = exercicios.associateBy { it.id }
+
+            val planos = ClienteSupabase.client.from("workout_plans")
+                .select {
                     filter { eq("user_id", uid) }
-                    order("sort_order", Order.ASCENDING)
+                    order("created_at", Order.ASCENDING)
                 }
                 .decodeList<FichaTreinoDto>()
 
-            fichas.map { f ->
-                f.copy(templateExercises = f.templateExercises.sortedBy { it.sortOrder })
+            if (planos.isEmpty()) return@withContext emptyList()
+
+            val todosItens = ClienteSupabase.client.from("workout_plan_items")
+                .select {
+                    order("sort_order", Order.ASCENDING)
+                }
+                .decodeList<ItemFichaTreinoDto>()
+
+            planos.map { plano ->
+                val itensDoPlano = todosItens
+                    .filter { it.planId == plano.id }
+                    .sortedBy { it.sortOrder }
+                    .map { item ->
+                        item.copy(exercise = mapaExercicios[item.exerciseId])
+                    }
+                plano.copy(items = itensDoPlano)
             }
         } catch (_: Exception) {
             emptyList()
@@ -103,19 +122,19 @@ object RepositorioTreinoria {
         try {
             val novaFicha = buildJsonObject {
                 put("user_id", targetUserId)
-                put("title", titulo.trim())
-                put("subtitle", subtitulo.trim())
+                put("name", titulo.trim())
+                put("description", subtitulo.trim())
                 put("day_of_week", diaSemana)
-                put("accent_color", corHex)
-                put("sort_order", 1)
+                put("color", corHex)
+                put("is_active", true)
             }
-            val inserida = ClienteSupabase.client.from("workout_templates")
+            val inserida = ClienteSupabase.client.from("workout_plans")
                 .insert(novaFicha) { select() }
                 .decodeSingle<FichaTreinoDto>()
 
             exerciciosSelecionados.forEachIndexed { idx, item ->
                 val vinc = buildJsonObject {
-                    put("template_id", inserida.id)
+                    put("plan_id", inserida.id)
                     put("exercise_id", item.first)
                     put("sort_order", idx + 1)
                     put("target_sets", item.second)
@@ -123,7 +142,7 @@ object RepositorioTreinoria {
                     put("target_weight_kg", 20.0)
                     put("rest_seconds", 90)
                 }
-                ClienteSupabase.client.from("template_exercises").insert(vinc)
+                ClienteSupabase.client.from("workout_plan_items").insert(vinc)
             }
             true
         } catch (_: Exception) {
@@ -131,10 +150,10 @@ object RepositorioTreinoria {
         }
     }
 
-    suspend fun excluirFicha(templateId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun excluirFicha(planId: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            ClienteSupabase.client.from("workout_templates").delete {
-                filter { eq("id", templateId) }
+            ClienteSupabase.client.from("workout_plans").delete {
+                filter { eq("id", planId) }
             }
             true
         } catch (_: Exception) {
@@ -158,7 +177,7 @@ object RepositorioTreinoria {
     }
 
     suspend fun salvarSessaoTreinoConcluida(
-        templateId: String?,
+        planId: String?,
         titulo: String,
         duracaoSegundos: Int,
         feeling: String,
@@ -168,18 +187,17 @@ object RepositorioTreinoria {
         val uid = obterUserIdAtual() ?: return@withContext null
         try {
             val volumeTotal = seriesConcluidas.sumOf { it.weightKg * it.reps }
-            val totalSeries = seriesConcluidas.size
+            val duracaoMinutos = (duracaoSegundos / 60).coerceAtLeast(1)
             val agora = OffsetDateTime.now().toString()
 
             val bodySessao = buildJsonObject {
                 put("user_id", uid)
-                if (!templateId.isNullOrBlank()) put("template_id", templateId)
+                if (!planId.isNullOrBlank()) put("plan_id", planId)
                 put("title", titulo)
                 put("started_at", agora)
                 put("finished_at", agora)
-                put("duration_seconds", duracaoSegundos)
+                put("duration_minutes", duracaoMinutos)
                 put("total_volume_kg", volumeTotal)
-                put("total_sets", totalSeries)
                 put("feeling", feeling)
                 if (notas.isNotBlank()) put("notes", notas)
             }
@@ -192,15 +210,16 @@ object RepositorioTreinoria {
                 val payloadSeries = seriesConcluidas.map { s ->
                     buildJsonObject {
                         put("session_id", sessaoCriada.id)
+                        put("user_id", uid)
                         put("exercise_id", s.exerciseId)
                         put("set_number", s.setNumber)
                         put("weight_kg", s.weightKg)
                         put("reps", s.reps)
                         put("is_warmup", s.isWarmup)
-                        put("completed", true)
+                        put("is_completed", true)
                     }
                 }
-                ClienteSupabase.client.from("session_sets").insert(payloadSeries)
+                ClienteSupabase.client.from("workout_sets").insert(payloadSeries)
             }
 
             sessaoCriada
@@ -235,6 +254,7 @@ object RepositorioTreinoria {
                 put("user_id", uid)
                 put("log_date", hoje)
                 put("water_ml", waterMl.coerceAtLeast(0))
+                put("water_goal_ml", 3000)
                 put("creatine_taken", creatineTaken)
             }
             ClienteSupabase.client.from("daily_habits")
@@ -275,8 +295,9 @@ object RepositorioTreinoria {
         try {
             val payload = buildJsonObject {
                 put("user_id", uid)
-                put("meal_title", titulo)
-                put("calories", calorias)
+                put("meal_type", "Refeição")
+                put("dish_name", titulo)
+                put("calories_kcal", calorias)
                 put("protein_g", proteinaG)
                 put("carbs_g", carboG)
                 put("fat_g", gorduraG)
@@ -322,8 +343,8 @@ object RepositorioTreinoria {
                 if (bfPct != null) put("body_fat_pct", bfPct)
                 if (peitoCm != null) put("chest_cm", peitoCm)
                 if (cinturaCm != null) put("waist_cm", cinturaCm)
-                if (bracoCm != null) put("arm_cm", bracoCm)
-                if (coxaCm != null) put("thigh_cm", coxaCm)
+                if (bracoCm != null) put("arms_cm", bracoCm)
+                if (coxaCm != null) put("legs_cm", coxaCm)
                 if (notas.isNotBlank()) put("notes", notas)
             }
             ClienteSupabase.client.from("body_measurements").insert(payload)
@@ -359,9 +380,9 @@ object RepositorioTreinoria {
             val payload = buildJsonObject {
                 put("trainer_id", uid)
                 put("student_name", nome.trim())
-                if (email.isNotBlank()) put("student_email", email.trim())
-                if (telefone.isNotBlank()) put("student_phone", telefone.trim())
-                put("goal", objetivo.trim().ifBlank { "Hipertrofia" })
+                put("student_email", email.trim().ifBlank { "${nome.lowercase().replace(" ", ".")}@treinoria.app" })
+                if (telefone.isNotBlank()) put("student_whatsapp", telefone.trim())
+                put("student_goal", objetivo.trim().ifBlank { "Hipertrofia" })
                 put("status", "active")
                 if (notas.isNotBlank()) put("notes", notas.trim())
             }

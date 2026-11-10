@@ -54,6 +54,7 @@ fun TelaPersonalEConstrutor() {
     val recarregar = {
         escopo.launch {
             carregando = true
+            RepositorioTreinoria.garantirDadosIniciaisUsuario()
             minhasFichas = RepositorioTreinoria.listarFichasTreino()
             alunos = RepositorioTreinoria.listarAlunosPersonal()
             if (catalogoExercicios.isEmpty()) {
@@ -252,7 +253,7 @@ fun TelaPersonalEConstrutor() {
                                 exerciciosSelecionados = triplas
                             )
 
-                            val foneAluno = alunoAlvoPrescricao?.studentPhone
+                            val foneAluno = alunoAlvoPrescricao?.studentWhatsapp
                             if (!foneAluno.isNullOrBlank()) {
                                 val nomesEx = catalogoExercicios
                                     .filter { exerciciosEscolhidosIds.contains(it.id) }
@@ -271,7 +272,7 @@ fun TelaPersonalEConstrutor() {
                             salvandoFicha = false
                             exibirModalNovaFicha = false
                             exerciciosEscolhidosIds.clear()
-                            feedbackMensagem = "✅ Ficha salva e enviada com sucesso!"
+                            feedbackMensagem = "✅ Ficha salva e sincronizada com sucesso!"
                             recarregar()
                         }
                     }
@@ -301,7 +302,7 @@ fun TelaPersonalEConstrutor() {
                 FilterChip(
                     selected = abaSelecionada == 0,
                     onClick = { abaSelecionada = 0 },
-                    label = { Text("📋 Construtor de Fichas", fontWeight = FontWeight.Bold) },
+                    label = { Text("📋 Minhas Fichas (${minhasFichas.size})", fontWeight = FontWeight.Bold) },
                     modifier = Modifier.weight(1f)
                 )
                 FilterChip(
@@ -358,9 +359,9 @@ fun TelaPersonalEConstrutor() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(ficha.title, fontWeight = FontWeight.Black, fontSize = 15.sp, color = VerdeEsmeralda)
+                                Text(ficha.name, fontWeight = FontWeight.Black, fontSize = 15.sp, color = VerdeEsmeralda)
                                 Text(
-                                    "${ficha.subtitle ?: "Hipertrofia"} • ${ficha.templateExercises.size} exercícios",
+                                    "${ficha.description ?: "Hipertrofia"} • ${ficha.items.size} exercícios",
                                     fontSize = 12.sp,
                                     color = TextoSecundario
                                 )
@@ -374,6 +375,17 @@ fun TelaPersonalEConstrutor() {
                                 }
                             ) {
                                 Icon(Icons.Default.DeleteOutline, contentDescription = "Excluir", tint = VermelhoAlerta)
+                            }
+                        }
+
+                        if (ficha.items.isNotEmpty()) {
+                            HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
+                            ficha.items.forEach { item ->
+                                Text(
+                                    text = "• ${item.exercise?.name ?: "Exercício"} (${item.targetSets}x ${item.targetReps})",
+                                    fontSize = 11.sp,
+                                    color = TextoPrimario
+                                )
                             }
                         }
                     }
@@ -425,7 +437,7 @@ fun TelaPersonalEConstrutor() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(aluno.studentName, fontWeight = FontWeight.Black, fontSize = 15.sp)
                                 Text(
-                                    "🎯 ${aluno.goal} • 📱 ${aluno.studentPhone ?: "Sem WhatsApp"}",
+                                    "🎯 ${aluno.studentGoal} • 📱 ${aluno.studentWhatsapp ?: "Sem WhatsApp"}",
                                     fontSize = 12.sp,
                                     color = TextoSecundario
                                 )
@@ -460,17 +472,17 @@ fun TelaPersonalEConstrutor() {
                                 Text("Prescrever Ficha", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            if (!aluno.studentPhone.isNullOrBlank()) {
+                            if (!aluno.studentWhatsapp.isNullOrBlank()) {
                                 OutlinedButton(
                                     onClick = {
                                         escopo.launch {
                                             RepositorioTreinoria.enviarMensagemWhatsapp(
-                                                numero = aluno.studentPhone,
+                                                numero = aluno.studentWhatsapp,
                                                 texto = "💪 *TreinorIA PRO • Acompanhamento do Personal*\n\n" +
                                                     "Fala, *${aluno.studentName}*! Como estão os treinos desta semana? " +
                                                     "Não esqueça de registrar suas cargas no app: https://treinoria.raevan.com.br"
                                             )
-                                            feedbackMensagem = "✅ Mensagem de cobrança/incentivo enviada no WhatsApp de ${aluno.studentName}!"
+                                            feedbackMensagem = "✅ Mensagem enviada no WhatsApp de ${aluno.studentName}!"
                                         }
                                     },
                                     shape = RoundedCornerShape(10.dp),

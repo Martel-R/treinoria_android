@@ -29,7 +29,6 @@ import kotlinx.coroutines.launch
 fun TelaPainelPrincipal(
     aoIniciarTreinoDaFicha: (FichaTreinoDto) -> Unit,
     aoAbrirPersonalHub: () -> Unit,
-    aoAbrirCatalogo: () -> Unit,
     aoFazerLogout: () -> Unit
 ) {
     val escopo = rememberCoroutineScope()
@@ -285,7 +284,7 @@ fun TelaPainelPrincipal(
                             fontWeight = FontWeight.Black,
                             color = VerdeEsmeralda
                         )
-                        Text("Meta: ${perfil?.weeklyGoal ?: 4}x/sem", fontSize = 10.sp, color = TextoSecundario)
+                        Text("Meta: ${perfil?.weeklyGoal ?: 5}x/sem", fontSize = 10.sp, color = TextoSecundario)
                     }
                 }
                 Surface(
@@ -296,7 +295,7 @@ fun TelaPainelPrincipal(
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text("Volume Total", fontSize = 11.sp, color = TextoSecundario)
                         Text(
-                            "${volumeTotalAcumulado} kg",
+                            "$volumeTotalAcumulado kg",
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Black,
                             color = CianoNeon
@@ -307,7 +306,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Card Check-in Pré-Treino IA & Catálogo 69 Exercícios
+        // Botão Check-in Pré-Treino IA + Montar Fichas
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -324,13 +323,13 @@ fun TelaPainelPrincipal(
                     Text("Check-in IA", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
                 OutlinedButton(
-                    onClick = aoAbrirCatalogo,
+                    onClick = aoAbrirPersonalHub,
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.weight(1f).height(48.dp)
                 ) {
-                    Icon(Icons.Default.PlayCircleOutline, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Assignment, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("69 Vídeos 4K", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CianoNeon)
+                    Text("Minhas Fichas", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = CianoNeon)
                 }
             }
         }
@@ -358,7 +357,7 @@ fun TelaPainelPrincipal(
                             )
                         }
                         Text(
-                            "${habitoHoje.waterMl} / ${perfil?.waterGoalMl ?: 3000} ml",
+                            "${habitoHoje.waterMl} / ${habitoHoje.waterGoalMl} ml",
                             color = CianoNeon,
                             fontWeight = FontWeight.Black,
                             fontSize = 13.sp
@@ -367,7 +366,7 @@ fun TelaPainelPrincipal(
 
                     LinearProgressIndicator(
                         progress = {
-                            (habitoHoje.waterMl.toFloat() / (perfil?.waterGoalMl ?: 3000).toFloat()).coerceIn(0f, 1f)
+                            (habitoHoje.waterMl.toFloat() / habitoHoje.waterGoalMl.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
                         },
                         modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
                         color = CianoNeon
@@ -434,12 +433,16 @@ fun TelaPainelPrincipal(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "Minhas Fichas de Treino (${fichas.size})",
+                    "Meu Plano de Treino (${fichas.size} Fichas)",
                     fontWeight = FontWeight.Black,
                     fontSize = 16.sp
                 )
                 if (carregando) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    IconButton(onClick = { recarregarDados() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Atualizar", tint = VerdeEsmeralda)
+                    }
                 }
             }
         }
@@ -458,7 +461,7 @@ fun TelaPainelPrincipal(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(ficha.title, fontWeight = FontWeight.Black, fontSize = 16.sp, color = VerdeEsmeraldaClaro)
+                                Text(ficha.name, fontWeight = FontWeight.Black, fontSize = 16.sp, color = VerdeEsmeraldaClaro)
                                 if (!ficha.dayOfWeek.isNullOrBlank()) {
                                     Surface(
                                         shape = RoundedCornerShape(6.dp),
@@ -473,8 +476,16 @@ fun TelaPainelPrincipal(
                                     }
                                 }
                             }
-                            if (!ficha.subtitle.isNullOrBlank()) {
-                                Text(ficha.subtitle, fontSize = 12.sp, color = TextoSecundario)
+                            if (!ficha.description.isNullOrBlank()) {
+                                Text(ficha.description, fontSize = 12.sp, color = TextoSecundario)
+                            }
+                            if (!ficha.prescribedByName.isNullOrBlank()) {
+                                Text(
+                                    "👨‍🏫 Prescrito por: ${ficha.prescribedByName}",
+                                    fontSize = 11.sp,
+                                    color = CianoNeon,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                         Button(
@@ -488,9 +499,9 @@ fun TelaPainelPrincipal(
                         }
                     }
 
-                    if (ficha.templateExercises.isNotEmpty()) {
+                    if (ficha.items.isNotEmpty()) {
                         HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
-                        ficha.templateExercises.take(5).forEach { item ->
+                        ficha.items.forEach { item ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -501,20 +512,14 @@ fun TelaPainelPrincipal(
                                     color = TextoPrimario,
                                     modifier = Modifier.weight(1f)
                                 )
+                                val pesoTxt = if ((item.targetWeightKg ?: 0.0) > 0) " (${item.targetWeightKg!!.toInt()}kg)" else ""
                                 Text(
-                                    text = "${item.targetSets}x ${item.targetReps} (${item.targetWeightKg.toInt()}kg)",
+                                    text = "${item.targetSets}x ${item.targetReps}$pesoTxt",
                                     fontSize = 11.sp,
                                     color = CianoNeon,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-                        }
-                        if (ficha.templateExercises.size > 5) {
-                            Text(
-                                text = "+ ${ficha.templateExercises.size - 5} exercícios na ficha",
-                                fontSize = 11.sp,
-                                color = TextoSecundario
-                            )
                         }
                     }
                 }
@@ -541,7 +546,7 @@ fun TelaPainelPrincipal(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(sessao.title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Text(
-                                "${sessao.totalSets} séries • ${(sessao.durationSeconds / 60).coerceAtLeast(1)} min • ${sessao.feeling ?: "Forte 🔥"}",
+                                "${sessao.durationMinutes ?: 45} min • ${sessao.feeling ?: "Ótimo 🔥"}",
                                 fontSize = 11.sp,
                                 color = TextoSecundario
                             )

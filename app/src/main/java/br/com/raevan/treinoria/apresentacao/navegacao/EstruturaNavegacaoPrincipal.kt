@@ -14,7 +14,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import br.com.raevan.treinoria.apresentacao.catalogo.TelaCatalogoExercicios
 import br.com.raevan.treinoria.apresentacao.login.LoginViewModel
 import br.com.raevan.treinoria.apresentacao.login.TelaDesbloqueioBiometrico
 import br.com.raevan.treinoria.apresentacao.login.TelaLogin
@@ -177,9 +176,6 @@ fun EstruturaNavegacaoPrincipal() {
                     aoAbrirPersonalHub = {
                         controladorNavegacao.navigate(DestinoNavegacao.PersonalHub.rota)
                     },
-                    aoAbrirCatalogo = {
-                        controladorNavegacao.navigate(DestinoNavegacao.Catalogo.rota)
-                    },
                     aoFazerLogout = {
                         loginViewModel.fazerLogout()
                         controladorNavegacao.navigate(DestinoNavegacao.Login.rota) {
@@ -198,10 +194,6 @@ fun EstruturaNavegacaoPrincipal() {
                         }
                     }
                 )
-            }
-
-            composable(DestinoNavegacao.Catalogo.rota) {
-                TelaCatalogoExercicios()
             }
 
             composable(DestinoNavegacao.NutricaoEvolucao.rota) {
