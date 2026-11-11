@@ -45,6 +45,7 @@ import br.com.raevan.treinoria.nucleo.atualizacao.GerenciadorAtualizacaoApp
 import br.com.raevan.treinoria.nucleo.atualizacao.InfoVersaoRemota
 import br.com.raevan.treinoria.nucleo.componentes.DialogoVideoExercicioNativo
 import br.com.raevan.treinoria.nucleo.componentes.MapaCorporalFadigaCard
+import br.com.raevan.treinoria.nucleo.notificacoes.GerenciadorNotificacoes
 import br.com.raevan.treinoria.nucleo.saude.GerenciadorHealthConnect
 import br.com.raevan.treinoria.nucleo.saude.ResumoSaudeDiaria
 import br.com.raevan.treinoria.nucleo.tema.*
@@ -55,15 +56,12 @@ import kotlinx.coroutines.launch
 fun TelaPainelPrincipal(
     aoIniciarTreinoDaFicha: (FichaTreinoDto) -> Unit,
     aoAbrirPersonalHub: () -> Unit,
+    aoAbrirScannerPreTreino: () -> Unit = {},
     aoFazerLogout: () -> Unit
 ) {
     val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
-    // =========================================================================
-    // INICIALIZAÇÃO INSTANTÂNEA A PARTIR DO CACHE EM MEMÓRIA (0ms de Loading!)
-    // Quando o usuário volta para a aba Início, tudo já está preenchido na hora!
-    // =========================================================================
     var carregando by remember {
         mutableStateOf(RepositorioTreinoria.cachePerfil == null && RepositorioTreinoria.cacheFichas.isEmpty())
     }
@@ -83,7 +81,6 @@ fun TelaPainelPrincipal(
         )
     }
 
-    // Modal de Edição de Perfil & Foto de Perfil
     var exibirModalPerfil by remember { mutableStateOf(false) }
     var editNome by remember { mutableStateOf("") }
     var editObjetivo by remember { mutableStateOf("Hipertrofia") }
@@ -94,7 +91,6 @@ fun TelaPainelPrincipal(
     var enviandoFotoPerfil by remember { mutableStateOf(false) }
     var salvandoPerfil by remember { mutableStateOf(false) }
 
-    // Estado do Android Health Connect
     var resumoSaude by remember { mutableStateOf(ResumoSaudeDiaria()) }
     var sincronizandoSaude by remember { mutableStateOf(false) }
 
@@ -106,6 +102,11 @@ fun TelaPainelPrincipal(
     var verificandoAtualizacao by remember { mutableStateOf(false) }
     var infoAtualizacaoManual by remember { mutableStateOf<InfoVersaoRemota?>(null) }
     var mensagemStatusAtualizacao by remember { mutableStateOf<String?>(null) }
+
+    // Cronograma Inteligente de Pré-Treino calculado pelo horário médio da última semana!
+    val cronogramaPreTreino = remember(sessoes) {
+        GerenciadorNotificacoes.agendarLembreteDiarioPreTreino(contexto, sessoes)
+    }
 
     val processarNovaFotoPerfil = { bmp: Bitmap ->
         avatarBitmap = bmp
@@ -166,11 +167,8 @@ fun TelaPainelPrincipal(
         atualizarResumoSaude()
     }
 
-    // Carrega apenas o que ainda não estiver em cache (ou sincroniza do cache em 0ms)
     LaunchedEffect(Unit) {
         dataReferenciaHoje = RepositorioTreinoria.obterDataHojeIso()
-        // Se já temos cache populado (ex: usuário acabou de concluir treino ou editar ficha),
-        // apenas lê direto da memória sem fazer chamadas repetidas na rede!
         if (RepositorioTreinoria.cachePerfil != null && RepositorioTreinoria.cacheFichas.isNotEmpty()) {
             perfil = RepositorioTreinoria.cachePerfil
             avatarBitmap = RepositorioTreinoria.cacheAvatarBitmap
@@ -201,7 +199,6 @@ fun TelaPainelPrincipal(
         }
     }
 
-    // Vigilante silencioso de virada de dia (00:00) para resetar a Hidratação & Suplementos
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000)
@@ -249,7 +246,6 @@ fun TelaPainelPrincipal(
         }
     }
 
-    // Modal de Edição de Perfil & Foto de Perfil
     if (exibirModalPerfil) {
         AlertDialog(
             onDismissRequest = { if (!salvandoPerfil) exibirModalPerfil = false },
@@ -577,7 +573,103 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Card Oficial: ANDROID HEALTH CONNECT (Google Fit / Samsung Health / Smartwatches)
+        // =====================================================================
+        // CARD DE LEMBRETE INTELIGENTE DE REFEIÇÃO PRÉ-TREINO (Baseado no Horário Médio da Última Semana!)
+        // =====================================================================
+        item {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = SuperficieCard,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = AmbarDestaque,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "⏰ Lembrete de Refeição Pré-Treino (${cronogramaPreTreino.horarioLembreteComerFormatado})",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 13.sp,
+                                    color = AmbarDestaque
+                                )
+                                Text(
+                                    text = "Horário médio dos seus treinos na última semana: ${cronogramaPreTreino.horarioMedioTreinoFormatado}",
+                                    fontSize = 11.sp,
+                                    color = TextoSecundario
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                GerenciadorNotificacoes.dispararNotificacaoRefeicaoPreTreino(
+                                    context = contexto,
+                                    horarioMedioTreino = cronogramaPreTreino.horarioMedioTreinoFormatado,
+                                    horarioRefeicao = cronogramaPreTreino.horarioLembreteComerFormatado
+                                )
+                            }
+                        ) {
+                            Text("Testar Alerta 🔔", fontSize = 10.sp, color = CianoNeon, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = FundoAcademia,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "🍽️ Opções Acessíveis p/ Comer às ${cronogramaPreTreino.horarioLembreteComerFormatado} (1h15 antes):",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                color = VerdeEsmeraldaClaro
+                            )
+                            cronogramaPreTreino.opcoesAcessiveis.take(3).forEach { op ->
+                                Text(
+                                    text = "• ${op.titulo} (${op.custoMedio}) → ${op.macrosResumo}",
+                                    fontSize = 11.sp,
+                                    color = TextoPrimario
+                                )
+                            }
+                        }
+                    }
+
+                    Button(
+                        onClick = aoAbrirScannerPreTreino,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                        modifier = Modifier.fillMaxWidth().height(46.dp)
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "📸 Enviar Foto da Minha Refeição de Pré-Treino",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // Card Oficial: ANDROID HEALTH CONNECT
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -744,7 +836,6 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Atalho Rápido se for Personal Trainer
         if (perfil?.accountRole == "trainer") {
             item {
                 Surface(
@@ -823,7 +914,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Card Exclusivo: TREINO DO DIA (Apenas 1 ficha — a de hoje!)
+        // Card Exclusivo: TREINO DO DIA
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -840,7 +931,7 @@ fun TelaPainelPrincipal(
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
                     TextButton(onClick = aoAbrirPersonalHub) {
-                        Text("Ver/Editar Fichas", fontSize = 12.sp, color = CianoNeon)
+                        Text("Desempenho & Fichas", fontSize = 12.sp, color = CianoNeon)
                     }
                 }
             }
@@ -934,7 +1025,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // Widget Diário Completo de Hidratação + Creatina + Pré-Treino + Pós-Treino (Reseta Diariamente às 00:00!)
+        // Widget Diário Completo de Hidratação + Creatina + Pré-Treino + Pós-Treino
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),

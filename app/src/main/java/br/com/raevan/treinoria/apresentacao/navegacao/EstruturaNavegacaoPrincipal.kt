@@ -47,6 +47,15 @@ fun EstruturaNavegacaoPrincipal() {
     }
     var infoAtualizacaoPendente by remember { mutableStateOf<InfoVersaoRemota?>(null) }
     var fichaAtivaSelecionada by remember { mutableStateOf<FichaTreinoDto?>(null) }
+    var abrirCameraPreTreinoAutomatico by remember {
+        mutableStateOf(
+            try {
+                (contexto as? android.app.Activity)?.intent?.getBooleanExtra("abrir_camera_pre_treino", false) ?: false
+            } catch (_: Throwable) {
+                false
+            }
+        )
+    }
     var roleUsuario by remember {
         mutableStateOf(
             try { GerenciadorSessao.obterInstancia().obterRoleSalva() } catch (_: Exception) { "athlete" }
@@ -207,6 +216,16 @@ fun EstruturaNavegacaoPrincipal() {
                     aoAbrirPersonalHub = {
                         controladorNavegacao.navigate(DestinoNavegacao.PersonalHub.rota)
                     },
+                    aoAbrirScannerPreTreino = {
+                        abrirCameraPreTreinoAutomatico = true
+                        controladorNavegacao.navigate(DestinoNavegacao.NutricaoEvolucao.rota) {
+                            popUpTo(controladorNavegacao.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                     aoFazerLogout = {
                         loginViewModel.fazerLogout()
                         controladorNavegacao.navigate(DestinoNavegacao.Login.rota) {
@@ -228,7 +247,10 @@ fun EstruturaNavegacaoPrincipal() {
             }
 
             composable(DestinoNavegacao.NutricaoEvolucao.rota) {
-                TelaNutricaoEvolucao()
+                TelaNutricaoEvolucao(
+                    iniciarCameraPreTreino = abrirCameraPreTreinoAutomatico,
+                    aoConsumirGatilhoCamera = { abrirCameraPreTreinoAutomatico = false }
+                )
             }
 
             composable(DestinoNavegacao.PersonalHub.rota) {

@@ -122,6 +122,7 @@ data class RefeicaoLogDto(
     @SerialName("protein_g") val proteinG: Double = 0.0,
     @SerialName("carbs_g") val carbsG: Double = 0.0,
     @SerialName("fat_g") val fatG: Double = 0.0,
+    @SerialName("adherence_score") val adherenceScore: Int? = null,
     @SerialName("ai_feedback") val aiFeedback: String? = null,
     @SerialName("logged_at") val loggedAt: String = ""
 )
@@ -138,6 +139,17 @@ data class MedidaCorporalDto(
     @SerialName("arms_cm") val armsCm: Double? = null,
     @SerialName("legs_cm") val legsCm: Double? = null,
     val notes: String? = null
+)
+
+@Serializable
+data class FotoProgressoDto(
+    val id: String = "",
+    @SerialName("user_id") val userId: String = "",
+    @SerialName("photo_url") val photoUrl: String = "",
+    val category: String = "Evolução",
+    @SerialName("weight_kg") val weightKg: Double? = null,
+    val caption: String? = null,
+    @SerialName("taken_at") val takenAt: String = ""
 )
 
 @Serializable

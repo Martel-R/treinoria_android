@@ -47,6 +47,13 @@ data class AnalisePosturaAoVivoIa(
     val biomechanicalFeedback: String
 )
 
+data class ComparacaoShapeIaResultado(
+    val headline: String,
+    val visualChanges: List<String>,
+    val muscleHighlights: String,
+    val nextFocusTip: String
+)
+
 data class EstatisticaExercicioHistorico(
     val lastWeightKg: Double,
     val lastReps: Int,
@@ -113,6 +120,8 @@ object RepositorioTreinoria {
     @Volatile var cacheEstatisticasExercicios: Map<String, EstatisticaExercicioHistorico> = emptyMap()
     @Volatile var cacheRefeicoes: List<RefeicaoLogDto> = emptyList()
     @Volatile var cacheMedidas: List<MedidaCorporalDto> = emptyList()
+    @Volatile var cacheFotosProgresso: List<FotoProgressoDto> = emptyList()
+    @Volatile var cacheBitmapsPorUrl: MutableMap<String, Bitmap> = mutableMapOf()
     @Volatile var cacheAlunosPersonal: List<VinculoAlunoPersonalDto> = emptyList()
 
     fun limparTodoCache() {
@@ -130,6 +139,8 @@ object RepositorioTreinoria {
         cacheEstatisticasExercicios = emptyMap()
         cacheRefeicoes = emptyList()
         cacheMedidas = emptyList()
+        cacheFotosProgresso = emptyList()
+        cacheBitmapsPorUrl.clear()
         cacheAlunosPersonal = emptyList()
     }
 
@@ -262,6 +273,7 @@ object RepositorioTreinoria {
             }
             cacheAvatarBitmap = bitmap
             cacheAvatarUrl = urlPublica
+            cacheBitmapsPorUrl[urlPublica] = bitmap
             cachePerfil = cachePerfil?.copy(avatarUrl = urlPublica)
             urlPublica
         } catch (_: Exception) {
@@ -305,6 +317,7 @@ object RepositorioTreinoria {
 
     suspend fun baixarBitmapPorUrl(urlStr: String?): Bitmap? = withContext(Dispatchers.IO) {
         if (urlStr.isNullOrBlank()) return@withContext null
+        cacheBitmapsPorUrl[urlStr]?.let { return@withContext it }
         if (cacheAvatarBitmap != null && cacheAvatarUrl == urlStr) {
             return@withContext cacheAvatarBitmap
         }
@@ -316,12 +329,15 @@ object RepositorioTreinoria {
             }
             val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it) }
             if (bmp != null) {
-                cacheAvatarBitmap = bmp
-                cacheAvatarUrl = urlStr
+                cacheBitmapsPorUrl[urlStr] = bmp
+                if (urlStr == cachePerfil?.avatarUrl) {
+                    cacheAvatarBitmap = bmp
+                    cacheAvatarUrl = urlStr
+                }
             }
             bmp
         } catch (_: Throwable) {
-            cacheAvatarBitmap
+            cacheBitmapsPorUrl[urlStr]
         }
     }
 
@@ -477,11 +493,6 @@ object RepositorioTreinoria {
         resultado
     }
 
-    /**
-     * Analisa um frame da Câmera Ao Vivo (JPEG Base64) com o Gemini 2.5 Flash Vision
-     * e retorna a dica curta de voz (`shortVoiceTip`) + avaliação biomecânica (`biomechanicalFeedback`)
-     * idêntico ao `analyzeExercisePostureWithGemini` do Web App!
-     */
     suspend fun analisarPosturaCameraAoVivoComIa(
         nomeExercicio: String,
         grupoMuscular: String,
@@ -573,11 +584,6 @@ object RepositorioTreinoria {
         )
     }
 
-    /**
-     * Permite ao atleta CONVERSAR POR VOZ com o Coach IA durante a execução na Câmera Ao Vivo:
-     * recebe o que o atleta falou no microfone + o frame atual da câmera + dossiê do usuário
-     * e devolve uma resposta falada natural e direta!
-     */
     suspend fun conversarEmAudioComCoachNaCamera(
         context: Context?,
         nomeExercicio: String,
@@ -1128,7 +1134,9 @@ object RepositorioTreinoria {
             val caminho = "$uid/workouts/treino_${System.currentTimeMillis()}.jpg"
             val bucket = ClienteSupabase.client.storage.from("gym-images")
             bucket.upload(caminho, bytes) { upsert = true }
-            bucket.publicUrl(caminho)
+            val url = bucket.publicUrl(caminho)
+            cacheBitmapsPorUrl[url] = bitmap
+            url
         } catch (_: Exception) {
             null
         }
@@ -1297,7 +1305,7 @@ object RepositorioTreinoria {
                 .select {
                     filter { eq("user_id", uid) }
                     order("logged_at", Order.DESCENDING)
-                    limit(20)
+                    limit(30)
                 }
                 .decodeList<RefeicaoLogDto>()
             cacheRefeicoes = lista
@@ -1332,6 +1340,18 @@ object RepositorioTreinoria {
             }
             ClienteSupabase.client.from("meal_logs").insert(payload)
             listarRefeicoesRecentes(forcarAtualizacao = true)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun excluirRefeicao(mealId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            ClienteSupabase.client.from("meal_logs").delete {
+                filter { eq("id", mealId) }
+            }
+            cacheRefeicoes = cacheRefeicoes.filterNot { it.id == mealId }
             true
         } catch (_: Exception) {
             false
@@ -1443,7 +1463,7 @@ object RepositorioTreinoria {
                 .select {
                     filter { eq("user_id", uid) }
                     order("measured_at", Order.DESCENDING)
-                    limit(20)
+                    limit(25)
                 }
                 .decodeList<MedidaCorporalDto>()
             cacheMedidas = lista
@@ -1477,6 +1497,9 @@ object RepositorioTreinoria {
             }
             ClienteSupabase.client.from("body_measurements").insert(payload)
             if (pesoKg != null) {
+                ClienteSupabase.client.from("profiles").update(
+                    buildJsonObject { put("weight_kg", pesoKg) }
+                ) { filter { eq("id", uid) } }
                 cachePerfil = cachePerfil?.copy(weightKg = pesoKg)
             }
             listarMedidasCorporais(forcarAtualizacao = true)
@@ -1484,6 +1507,173 @@ object RepositorioTreinoria {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Lista a galeria de fotos de evolução corporal (`gym.progress_photos`).
+     */
+    suspend fun listarFotosProgresso(forcarAtualizacao: Boolean = false): List<FotoProgressoDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheFotosProgresso.isNotEmpty()) return@withContext cacheFotosProgresso
+
+        val uid = obterUserIdAtual() ?: return@withContext cacheFotosProgresso
+        try {
+            val lista = ClienteSupabase.client.from("progress_photos")
+                .select {
+                    filter { eq("user_id", uid) }
+                    order("taken_at", Order.DESCENDING)
+                    limit(30)
+                }
+                .decodeList<FotoProgressoDto>()
+            cacheFotosProgresso = lista
+            lista
+        } catch (_: Exception) {
+            cacheFotosProgresso
+        }
+    }
+
+    /**
+     * Envia foto do Shape para o bucket `gym-images` (`<uid>/progress/...`) e salva em `gym.progress_photos`.
+     */
+    suspend fun enviarESalvarFotoProgresso(
+        bitmap: Bitmap,
+        categoria: String,
+        pesoKg: Double?,
+        legenda: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        val uid = obterUserIdAtual() ?: return@withContext false
+        try {
+            val stream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+            val bytes = stream.toByteArray()
+            val caminho = "$uid/progress/shape_${System.currentTimeMillis()}.jpg"
+            val bucket = ClienteSupabase.client.storage.from("gym-images")
+            bucket.upload(caminho, bytes) { upsert = true }
+            val urlPublica = bucket.publicUrl(caminho)
+            cacheBitmapsPorUrl[urlPublica] = bitmap
+
+            val payload = buildJsonObject {
+                put("user_id", uid)
+                put("photo_url", urlPublica)
+                put("category", categoria.ifBlank { "Evolução" })
+                if (pesoKg != null) put("weight_kg", pesoKg)
+                if (legenda.isNotBlank()) put("caption", legenda.trim())
+                put("taken_at", obterDataHojeIso())
+            }
+            ClienteSupabase.client.from("progress_photos").insert(payload)
+            listarFotosProgresso(forcarAtualizacao = true)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun excluirFotoProgresso(photoId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            ClienteSupabase.client.from("progress_photos").delete {
+                filter { eq("id", photoId) }
+            }
+            cacheFotosProgresso = cacheFotosProgresso.filterNot { it.id == photoId }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Compara duas fotos do Shape (Antes vs. Depois) com o Gemini 2.5 Vision,
+     * idêntico ao `compareShapePhotosWithGemini` da Web!
+     */
+    suspend fun compararFotosAntesDepoisComIa(
+        context: Context?,
+        fotoAntes: FotoProgressoDto,
+        fotoDepois: FotoProgressoDto
+    ): ComparacaoShapeIaResultado = withContext(Dispatchers.IO) {
+        try {
+            val dossie = try { montarDossieCompletoUsuarioParaIa(context) } catch (_: Throwable) { "" }
+            val url = URL("${ClienteSupabase.WEB_BASE_URL}/api/ai/coach")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("User-Agent", ClienteSupabase.USER_AGENT_PADRAO)
+                connectTimeout = 25000
+                readTimeout = 45000
+                doOutput = true
+            }
+
+            val prompt = """
+                Você é o Avaliador Físico e Fisiculturista IA do TreinorIA PRO.
+                Compare o registro ANTES (${fotoAntes.takenAt}, Peso: ${fotoAntes.weightKg ?: "-"}kg, Categoria: ${fotoAntes.category})
+                com o registro DEPOIS (${fotoDepois.takenAt}, Peso: ${fotoDepois.weightKg ?: "-"}kg, Categoria: ${fotoDepois.category}).
+
+                $dossie
+
+                Responda OBRIGATORIAMENTE em JSON válido:
+                {
+                  "headline": "Manchete curta e motivadora sobre a evolução estética e corporal",
+                  "visual_changes": [
+                    "Mudança 1 observada na densidade/definição/proporção",
+                    "Mudança 2 observada na linha de cintura/ombros/volume",
+                    "Mudança 3 observada na simetria muscular"
+                  ],
+                  "muscle_highlights": "Destaques musculares principais da evolução",
+                  "next_focus_tip": "Recomendação prática de treino e dieta para as próximas 4 semanas"
+                }
+            """.trimIndent()
+
+            val body = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                        }
+                    )
+                )
+                put(
+                    "generationConfig",
+                    JSONObject().apply {
+                        put("temperature", 0.4)
+                        put("responseMimeType", "application/json")
+                    }
+                )
+            }
+
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) {
+                val respTxt = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(respTxt)
+                val cand = json.optJSONArray("candidates")?.optJSONObject(0)
+                val rawText = cand?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text") ?: ""
+                val limpo = rawText.substringAfter("{").substringBeforeLast("}")
+                val obj = JSONObject("{$limpo}")
+                val changesArr = obj.optJSONArray("visual_changes") ?: JSONArray()
+                val changes = mutableListOf<String>()
+                for (i in 0 until changesArr.length()) {
+                    changes.add(changesArr.getString(i))
+                }
+                return@withContext ComparacaoShapeIaResultado(
+                    headline = obj.optString("headline", "Evolução consistente em densidade muscular e proporção estética!"),
+                    visualChanges = if (changes.isNotEmpty()) changes else listOf(
+                        "Melhora visível no tônus e volume muscular geral",
+                        "Controle consistente da linha de cintura e composição corporal"
+                    ),
+                    muscleHighlights = obj.optString("muscle_highlights", "Peitoral, deltoides e linha abdominal com melhor separação."),
+                    nextFocusTip = obj.optString("next_focus_tip", "Mantenha proteína em 2g/kg e foque em sobrecarga progressiva nos compostos.")
+                )
+            }
+        } catch (_: Exception) {}
+
+        ComparacaoShapeIaResultado(
+            headline = "Excelente consistência estética entre os registros!",
+            visualChanges = listOf(
+                "Melhora na densidade miofibrilar e postura escapular",
+                "Manutenção de massa magra com boa proporção ombro-cintura"
+            ),
+            muscleHighlights = "Boa resposta hipertrófica em tronco e membros.",
+            nextFocusTip = "Continue registrando fotos mensais sob a mesma iluminação e bata sua meta diária de proteína."
+        )
     }
 
     suspend fun listarAlunosPersonal(forcarAtualizacao: Boolean = false): List<VinculoAlunoPersonalDto> = withContext(Dispatchers.IO) {

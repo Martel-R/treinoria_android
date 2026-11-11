@@ -13,8 +13,8 @@ android {
         applicationId = "br.com.raevan.treinoria"
         minSdk = 29
         targetSdk = 35
-        versionCode = 16
-        versionName = "2.5.0-pro"
+        versionCode = 17
+        versionName = "2.6.0-pro"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
