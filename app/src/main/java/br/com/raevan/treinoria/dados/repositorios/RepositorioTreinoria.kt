@@ -92,6 +92,61 @@ data class FichaGeradaPorIa(
 
 object RepositorioTreinoria {
 
+    // =========================================================================
+    // CACHE EM MEMÓRIA (Instantâneo 0ms ao alternar entre abas!)
+    // Só atualiza quando houver uma mutação real (treino salvo, água, ficha,
+    // perfil, medida, refeição) ou quando forçado manualmente.
+    // =========================================================================
+    @Volatile var cacheUserId: String? = null
+    @Volatile var cacheDataDiaIso: String? = null
+    @Volatile var cacheInicializado: Boolean = false
+
+    @Volatile var cachePerfil: PerfilDto? = null
+    @Volatile var cacheAvatarBitmap: Bitmap? = null
+    @Volatile var cacheAvatarUrl: String? = null
+    @Volatile var cacheExercicios: List<ExercicioDto> = emptyList()
+    @Volatile var cacheFichas: List<FichaTreinoDto> = emptyList()
+    @Volatile var cacheSessoes: List<SessaoTreinoDto> = emptyList()
+    @Volatile var cacheHabitoHoje: HabitoDiarioDto? = null
+    @Volatile var cacheMapaFadiga: Map<String, StatusMuscularInfo> = emptyMap()
+    @Volatile var cacheEstatisticasExercicios: Map<String, EstatisticaExercicioHistorico> = emptyMap()
+    @Volatile var cacheRefeicoes: List<RefeicaoLogDto> = emptyList()
+    @Volatile var cacheMedidas: List<MedidaCorporalDto> = emptyList()
+    @Volatile var cacheAlunosPersonal: List<VinculoAlunoPersonalDto> = emptyList()
+
+    fun limparTodoCache() {
+        cacheUserId = null
+        cacheDataDiaIso = null
+        cacheInicializado = false
+        cachePerfil = null
+        cacheAvatarBitmap = null
+        cacheAvatarUrl = null
+        cacheExercicios = emptyList()
+        cacheFichas = emptyList()
+        cacheSessoes = emptyList()
+        cacheHabitoHoje = null
+        cacheMapaFadiga = emptyMap()
+        cacheEstatisticasExercicios = emptyMap()
+        cacheRefeicoes = emptyList()
+        cacheMedidas = emptyList()
+        cacheAlunosPersonal = emptyList()
+    }
+
+    private fun validarSessaoECacheDoDia() {
+        val uidAtual = obterUserIdAtual()
+        if (uidAtual != null && cacheUserId != null && uidAtual != cacheUserId) {
+            limparTodoCache()
+        }
+        cacheUserId = uidAtual
+
+        val hoje = obterDataHojeIso()
+        if (cacheDataDiaIso != null && cacheDataDiaIso != hoje) {
+            // Virou o dia (00:00): reseta apenas o hábito do dia em memória!
+            cacheHabitoHoje = null
+        }
+        cacheDataDiaIso = hoje
+    }
+
     fun obterDataHojeIso(): String {
         return LocalDate.now(ZoneId.systemDefault()).toString()
     }
@@ -162,8 +217,11 @@ object RepositorioTreinoria {
         return fichas.first()
     }
 
-    suspend fun carregarPerfil(): PerfilDto? = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext null
+    suspend fun carregarPerfil(forcarAtualizacao: Boolean = false): PerfilDto? = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cachePerfil != null) return@withContext cachePerfil
+
+        val uid = obterUserIdAtual() ?: return@withContext cachePerfil
         try {
             val lista = ClienteSupabase.client.from("profiles")
                 .select {
@@ -172,6 +230,7 @@ object RepositorioTreinoria {
                 .decodeList<PerfilDto>()
             val perfil = lista.firstOrNull()
             if (perfil != null) {
+                cachePerfil = perfil
                 try {
                     GerenciadorSessao.obterInstancia()
                         .salvarPerfilLocal(perfil.id, perfil.name, perfil.accountRole)
@@ -179,14 +238,10 @@ object RepositorioTreinoria {
             }
             perfil
         } catch (_: Exception) {
-            null
+            cachePerfil
         }
     }
 
-    /**
-     * Faz upload da Foto de Perfil (Avatar) para o bucket `gym-images` do Supabase Storage,
-     * salva `avatar_url` na tabela `gym.profiles` e retorna a URL pública.
-     */
     suspend fun enviarESalvarFotoPerfil(bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
         val uid = obterUserIdAtual() ?: return@withContext null
         try {
@@ -205,15 +260,15 @@ object RepositorioTreinoria {
             ClienteSupabase.client.from("profiles").update(payload) {
                 filter { eq("id", uid) }
             }
+            cacheAvatarBitmap = bitmap
+            cacheAvatarUrl = urlPublica
+            cachePerfil = cachePerfil?.copy(avatarUrl = urlPublica)
             urlPublica
         } catch (_: Exception) {
             null
         }
     }
 
-    /**
-     * Atualiza as informações e metas do perfil do atleta na tabela `gym.profiles`.
-     */
     suspend fun atualizarPerfilAtleta(
         nome: String,
         objetivo: String,
@@ -235,59 +290,75 @@ object RepositorioTreinoria {
                 if (avatarUrl != null) put("avatar_url", avatarUrl)
                 put("updated_at", OffsetDateTime.now().toString())
             }
-            ClienteSupabase.client.from("profiles")
+            val atualizado = ClienteSupabase.client.from("profiles")
                 .update(payload) {
                     filter { eq("id", uid) }
                     select()
                 }
                 .decodeSingle<PerfilDto>()
+            cachePerfil = atualizado
+            atualizado
         } catch (_: Exception) {
-            carregarPerfil()
+            carregarPerfil(forcarAtualizacao = true)
         }
     }
 
-    /**
-     * Baixa um Bitmap a partir de uma URL pública (para exibir a foto de perfil salva).
-     */
     suspend fun baixarBitmapPorUrl(urlStr: String?): Bitmap? = withContext(Dispatchers.IO) {
         if (urlStr.isNullOrBlank()) return@withContext null
+        if (cacheAvatarBitmap != null && cacheAvatarUrl == urlStr) {
+            return@withContext cacheAvatarBitmap
+        }
         try {
             val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10000
                 readTimeout = 15000
                 doInput = true
             }
-            conn.inputStream.use { BitmapFactory.decodeStream(it) }
+            val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it) }
+            if (bmp != null) {
+                cacheAvatarBitmap = bmp
+                cacheAvatarUrl = urlStr
+            }
+            bmp
         } catch (_: Throwable) {
-            null
+            cacheAvatarBitmap
         }
     }
 
     suspend fun garantirDadosIniciaisUsuario(): Unit = withContext(Dispatchers.IO) {
+        if (cacheInicializado && cacheFichas.isNotEmpty()) return@withContext
         val uid = obterUserIdAtual() ?: return@withContext
         try {
             val params = buildJsonObject {
                 put("p_user_id", uid)
             }
             ClienteSupabase.client.postgrest.rpc("seed_default_plans_for_user", params)
+            cacheInicializado = true
         } catch (_: Exception) {}
     }
 
-    suspend fun listarExercicios(): List<ExercicioDto> = withContext(Dispatchers.IO) {
+    suspend fun listarExercicios(forcarAtualizacao: Boolean = false): List<ExercicioDto> = withContext(Dispatchers.IO) {
+        if (!forcarAtualizacao && cacheExercicios.isNotEmpty()) return@withContext cacheExercicios
         try {
-            ClienteSupabase.client.from("exercises")
+            val lista = ClienteSupabase.client.from("exercises")
                 .select {
                     order("muscle_group", Order.ASCENDING)
                     order("name", Order.ASCENDING)
                 }
                 .decodeList<ExercicioDto>()
+            if (lista.isNotEmpty()) cacheExercicios = lista
+            lista
         } catch (_: Exception) {
-            emptyList()
+            cacheExercicios
         }
     }
 
-    suspend fun obterEstatisticasExercicios(): Map<String, EstatisticaExercicioHistorico> = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext emptyMap()
+    suspend fun obterEstatisticasExercicios(forcarAtualizacao: Boolean = false): Map<String, EstatisticaExercicioHistorico> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheEstatisticasExercicios.isNotEmpty()) {
+            return@withContext cacheEstatisticasExercicios
+        }
+        val uid = obterUserIdAtual() ?: return@withContext cacheEstatisticasExercicios
         try {
             val series = ClienteSupabase.client.from("workout_sets")
                 .select {
@@ -309,13 +380,19 @@ object RepositorioTreinoria {
                     )
                 }
             }
+            cacheEstatisticasExercicios = mapa
             mapa
         } catch (_: Exception) {
-            emptyMap()
+            cacheEstatisticasExercicios
         }
     }
 
-    suspend fun calcularMapaFadigaMuscular(): Map<String, StatusMuscularInfo> = withContext(Dispatchers.IO) {
+    suspend fun calcularMapaFadigaMuscular(forcarAtualizacao: Boolean = false): Map<String, StatusMuscularInfo> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheMapaFadiga.isNotEmpty()) {
+            return@withContext cacheMapaFadiga
+        }
+
         val resultado = mutableMapOf<String, StatusMuscularInfo>()
         MUSCULOS_RASTREADOS.forEach { m ->
             resultado[m] = StatusMuscularInfo(
@@ -394,6 +471,7 @@ object RepositorioTreinoria {
                     )
                 }
             }
+            cacheMapaFadiga = resultado
         } catch (_: Exception) {}
 
         resultado
@@ -410,7 +488,7 @@ object RepositorioTreinoria {
         val sessoes = listarSessoesRecentes(10)
         val estatisticas = obterEstatisticasExercicios()
         val fadiga = calcularMapaFadigaMuscular()
-        val mapaEx = catalogoExercicios.associateBy { it.id }
+        val mapaEx = catalogoExercicios.ifEmpty { listarExercicios() }.associateBy { it.id }
 
         val saude = if (context != null) {
             try { GerenciadorHealthConnect.lerResumoDiario(context) } catch (_: Throwable) { null }
@@ -729,8 +807,19 @@ object RepositorioTreinoria {
         null
     }
 
-    suspend fun listarFichasTreino(targetUserId: String? = null): List<FichaTreinoDto> = withContext(Dispatchers.IO) {
-        val uid = targetUserId ?: obterUserIdAtual() ?: return@withContext emptyList()
+    suspend fun listarFichasTreino(
+        targetUserId: String? = null,
+        forcarAtualizacao: Boolean = false
+    ): List<FichaTreinoDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        val uidAtual = obterUserIdAtual()
+        val ehProprioUsuario = targetUserId == null || targetUserId == uidAtual
+
+        if (!forcarAtualizacao && ehProprioUsuario && cacheFichas.isNotEmpty()) {
+            return@withContext cacheFichas
+        }
+
+        val uid = targetUserId ?: uidAtual ?: return@withContext cacheFichas
         try {
             val exercicios = listarExercicios()
             val mapaExercicios = exercicios.associateBy { it.id }
@@ -742,7 +831,10 @@ object RepositorioTreinoria {
                 }
                 .decodeList<FichaTreinoDto>()
 
-            if (planos.isEmpty()) return@withContext emptyList()
+            if (planos.isEmpty()) {
+                if (ehProprioUsuario) cacheFichas = emptyList()
+                return@withContext emptyList()
+            }
 
             val todosItens = ClienteSupabase.client.from("workout_plan_items")
                 .select {
@@ -750,7 +842,7 @@ object RepositorioTreinoria {
                 }
                 .decodeList<ItemFichaTreinoDto>()
 
-            planos.map { plano ->
+            val resultado = planos.map { plano ->
                 val itensDoPlano = todosItens
                     .filter { it.planId == plano.id }
                     .sortedBy { it.sortOrder }
@@ -759,8 +851,10 @@ object RepositorioTreinoria {
                     }
                 plano.copy(items = itensDoPlano)
             }
+            if (ehProprioUsuario) cacheFichas = resultado
+            resultado
         } catch (_: Exception) {
-            emptyList()
+            if (ehProprioUsuario) cacheFichas else emptyList()
         }
     }
 
@@ -803,6 +897,8 @@ object RepositorioTreinoria {
                 }
                 ClienteSupabase.client.from("workout_plan_items").insert(vinc)
             }
+            // Invalida e atualiza imediatamente o cache de fichas!
+            listarFichasTreino(forcarAtualizacao = true)
             true
         } catch (_: Exception) {
             false
@@ -814,24 +910,35 @@ object RepositorioTreinoria {
             ClienteSupabase.client.from("workout_plans").delete {
                 filter { eq("id", planId) }
             }
+            cacheFichas = cacheFichas.filterNot { it.id == planId }
+            listarFichasTreino(forcarAtualizacao = true)
             true
         } catch (_: Exception) {
             false
         }
     }
 
-    suspend fun listarSessoesRecentes(limite: Int = 25): List<SessaoTreinoDto> = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext emptyList()
+    suspend fun listarSessoesRecentes(
+        limite: Int = 25,
+        forcarAtualizacao: Boolean = false
+    ): List<SessaoTreinoDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheSessoes.isNotEmpty()) {
+            return@withContext cacheSessoes.take(limite)
+        }
+        val uid = obterUserIdAtual() ?: return@withContext cacheSessoes
         try {
-            ClienteSupabase.client.from("workout_sessions")
+            val lista = ClienteSupabase.client.from("workout_sessions")
                 .select {
                     filter { eq("user_id", uid) }
                     order("started_at", Order.DESCENDING)
-                    limit(limite.toLong())
+                    limit(limite.toLong().coerceAtLeast(25L))
                 }
                 .decodeList<SessaoTreinoDto>()
+            cacheSessoes = lista
+            lista.take(limite)
         } catch (_: Exception) {
-            emptyList()
+            cacheSessoes.take(limite)
         }
     }
 
@@ -902,14 +1009,25 @@ object RepositorioTreinoria {
                 ClienteSupabase.client.from("workout_sets").insert(payloadSeries)
             }
 
+            // Atualiza imediatamente o cache de sessões, PRs e Mapa de Fadiga após concluir um treino!
+            listarSessoesRecentes(forcarAtualizacao = true)
+            obterEstatisticasExercicios(forcarAtualizacao = true)
+            calcularMapaFadigaMuscular(forcarAtualizacao = true)
+
             sessaoCriada
         } catch (_: Exception) {
             null
         }
     }
 
-    suspend fun obterHabitoHoje(): HabitoDiarioDto = withContext(Dispatchers.IO) {
+    suspend fun obterHabitoHoje(forcarAtualizacao: Boolean = false): HabitoDiarioDto = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
         val hoje = obterDataHojeIso()
+        val emCache = cacheHabitoHoje
+        if (!forcarAtualizacao && emCache != null && emCache.logDate.take(10) == hoje) {
+            return@withContext emCache
+        }
+
         val uid = obterUserIdAtual() ?: return@withContext HabitoDiarioDto(logDate = hoje)
         try {
             val lista = ClienteSupabase.client.from("daily_habits")
@@ -921,8 +1039,7 @@ object RepositorioTreinoria {
                 }
                 .decodeList<HabitoDiarioDto>()
 
-            val registroHoje = lista.firstOrNull { it.logDate.take(10) == hoje }
-            registroHoje ?: HabitoDiarioDto(
+            val registroHoje = lista.firstOrNull { it.logDate.take(10) == hoje } ?: HabitoDiarioDto(
                 userId = uid,
                 logDate = hoje,
                 waterMl = 0,
@@ -931,8 +1048,10 @@ object RepositorioTreinoria {
                 preWorkoutTaken = false,
                 postWorkoutTaken = false
             )
+            cacheHabitoHoje = registroHoje
+            registroHoje
         } catch (_: Exception) {
-            HabitoDiarioDto(
+            val fallback = HabitoDiarioDto(
                 userId = uid,
                 logDate = hoje,
                 waterMl = 0,
@@ -941,6 +1060,8 @@ object RepositorioTreinoria {
                 preWorkoutTaken = false,
                 postWorkoutTaken = false
             )
+            cacheHabitoHoje = fallback
+            fallback
         }
     }
 
@@ -954,47 +1075,60 @@ object RepositorioTreinoria {
         val hoje = obterDataHojeIso()
         val uid = obterUserIdAtual() ?: return@withContext HabitoDiarioDto(logDate = hoje)
         val mlLimpo = waterMl.coerceAtLeast(0)
+        val metaLimpa = waterGoalMl.coerceAtLeast(1000)
+
+        // Atualiza o cache em memória imediatamente (otimista)
+        val otimista = HabitoDiarioDto(
+            userId = uid,
+            logDate = hoje,
+            waterMl = mlLimpo,
+            waterGoalMl = metaLimpa,
+            creatineTaken = creatineTaken,
+            preWorkoutTaken = preWorkoutTaken,
+            postWorkoutTaken = postWorkoutTaken
+        )
+        cacheHabitoHoje = otimista
+
         try {
             val payload = buildJsonObject {
                 put("user_id", uid)
                 put("log_date", hoje)
                 put("water_ml", mlLimpo)
-                put("water_goal_ml", waterGoalMl.coerceAtLeast(1000))
+                put("water_goal_ml", metaLimpa)
                 put("creatine_taken", creatineTaken)
                 put("pre_workout_taken", preWorkoutTaken)
                 put("post_workout_taken", postWorkoutTaken)
             }
-            ClienteSupabase.client.from("daily_habits")
+            val salvo = ClienteSupabase.client.from("daily_habits")
                 .upsert(payload) {
                     onConflict = "user_id,log_date"
                     select()
                 }
                 .decodeSingle<HabitoDiarioDto>()
+            cacheHabitoHoje = salvo
+            salvo
         } catch (_: Exception) {
-            HabitoDiarioDto(
-                userId = uid,
-                logDate = hoje,
-                waterMl = mlLimpo,
-                waterGoalMl = waterGoalMl,
-                creatineTaken = creatineTaken,
-                preWorkoutTaken = preWorkoutTaken,
-                postWorkoutTaken = postWorkoutTaken
-            )
+            otimista
         }
     }
 
-    suspend fun listarRefeicoesRecentes(): List<RefeicaoLogDto> = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext emptyList()
+    suspend fun listarRefeicoesRecentes(forcarAtualizacao: Boolean = false): List<RefeicaoLogDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheRefeicoes.isNotEmpty()) return@withContext cacheRefeicoes
+
+        val uid = obterUserIdAtual() ?: return@withContext cacheRefeicoes
         try {
-            ClienteSupabase.client.from("meal_logs")
+            val lista = ClienteSupabase.client.from("meal_logs")
                 .select {
                     filter { eq("user_id", uid) }
                     order("logged_at", Order.DESCENDING)
                     limit(20)
                 }
                 .decodeList<RefeicaoLogDto>()
+            cacheRefeicoes = lista
+            lista
         } catch (_: Exception) {
-            emptyList()
+            cacheRefeicoes
         }
     }
 
@@ -1022,6 +1156,7 @@ object RepositorioTreinoria {
                 put("ai_feedback", feedbackIa)
             }
             ClienteSupabase.client.from("meal_logs").insert(payload)
+            listarRefeicoesRecentes(forcarAtualizacao = true)
             true
         } catch (_: Exception) {
             false
@@ -1123,18 +1258,23 @@ object RepositorioTreinoria {
         )
     }
 
-    suspend fun listarMedidasCorporais(): List<MedidaCorporalDto> = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext emptyList()
+    suspend fun listarMedidasCorporais(forcarAtualizacao: Boolean = false): List<MedidaCorporalDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheMedidas.isNotEmpty()) return@withContext cacheMedidas
+
+        val uid = obterUserIdAtual() ?: return@withContext cacheMedidas
         try {
-            ClienteSupabase.client.from("body_measurements")
+            val lista = ClienteSupabase.client.from("body_measurements")
                 .select {
                     filter { eq("user_id", uid) }
                     order("measured_at", Order.DESCENDING)
                     limit(20)
                 }
                 .decodeList<MedidaCorporalDto>()
+            cacheMedidas = lista
+            lista
         } catch (_: Exception) {
-            emptyList()
+            cacheMedidas
         }
     }
 
@@ -1161,23 +1301,32 @@ object RepositorioTreinoria {
                 if (notas.isNotBlank()) put("notes", notas)
             }
             ClienteSupabase.client.from("body_measurements").insert(payload)
+            if (pesoKg != null) {
+                cachePerfil = cachePerfil?.copy(weightKg = pesoKg)
+            }
+            listarMedidasCorporais(forcarAtualizacao = true)
             true
         } catch (_: Exception) {
             false
         }
     }
 
-    suspend fun listarAlunosPersonal(): List<VinculoAlunoPersonalDto> = withContext(Dispatchers.IO) {
-        val uid = obterUserIdAtual() ?: return@withContext emptyList()
+    suspend fun listarAlunosPersonal(forcarAtualizacao: Boolean = false): List<VinculoAlunoPersonalDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheAlunosPersonal.isNotEmpty()) return@withContext cacheAlunosPersonal
+
+        val uid = obterUserIdAtual() ?: return@withContext cacheAlunosPersonal
         try {
-            ClienteSupabase.client.from("trainer_students")
+            val lista = ClienteSupabase.client.from("trainer_students")
                 .select {
                     filter { eq("trainer_id", uid) }
                     order("created_at", Order.DESCENDING)
                 }
                 .decodeList<VinculoAlunoPersonalDto>()
+            cacheAlunosPersonal = lista
+            lista
         } catch (_: Exception) {
-            emptyList()
+            cacheAlunosPersonal
         }
     }
 
@@ -1200,6 +1349,7 @@ object RepositorioTreinoria {
                 if (notas.isNotBlank()) put("notes", notas.trim())
             }
             ClienteSupabase.client.from("trainer_students").insert(payload)
+            listarAlunosPersonal(forcarAtualizacao = true)
             true
         } catch (_: Exception) {
             false

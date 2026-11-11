@@ -33,9 +33,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.health.connect.client.PermissionController
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.HabitoDiarioDto
@@ -61,21 +58,32 @@ fun TelaPainelPrincipal(
     aoFazerLogout: () -> Unit
 ) {
     val contexto = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val escopo = rememberCoroutineScope()
 
-    var carregando by remember { mutableStateOf(true) }
-    var perfil by remember { mutableStateOf<PerfilDto?>(null) }
-    var avatarBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
-    var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(emptyList()) }
-    var mapaFadigaMuscular by remember { mutableStateOf<Map<String, StatusMuscularInfo>>(emptyMap()) }
+    // =========================================================================
+    // INICIALIZAÇÃO INSTANTÂNEA A PARTIR DO CACHE EM MEMÓRIA (0ms de Loading!)
+    // Quando o usuário volta para a aba Início, tudo já está preenchido na hora!
+    // =========================================================================
+    var carregando by remember {
+        mutableStateOf(RepositorioTreinoria.cachePerfil == null && RepositorioTreinoria.cacheFichas.isEmpty())
+    }
+    var perfil by remember { mutableStateOf<PerfilDto?>(RepositorioTreinoria.cachePerfil) }
+    var avatarBitmap by remember { mutableStateOf<Bitmap?>(RepositorioTreinoria.cacheAvatarBitmap) }
+    var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(RepositorioTreinoria.cacheFichas) }
+    var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(RepositorioTreinoria.cacheSessoes) }
+    var mapaFadigaMuscular by remember {
+        mutableStateOf<Map<String, StatusMuscularInfo>>(RepositorioTreinoria.cacheMapaFadiga)
+    }
     var dataReferenciaHoje by remember { mutableStateOf(RepositorioTreinoria.obterDataHojeIso()) }
     var habitoHoje by remember {
-        mutableStateOf(HabitoDiarioDto(logDate = RepositorioTreinoria.obterDataHojeIso()))
+        mutableStateOf(
+            RepositorioTreinoria.cacheHabitoHoje
+                ?.takeIf { it.logDate.take(10) == RepositorioTreinoria.obterDataHojeIso() }
+                ?: HabitoDiarioDto(logDate = RepositorioTreinoria.obterDataHojeIso())
+        )
     }
 
-    // Modal de Edição de Perfil & Foto de Perfil (Idêntico ao Web App!)
+    // Modal de Edição de Perfil & Foto de Perfil
     var exibirModalPerfil by remember { mutableStateOf(false) }
     var editNome by remember { mutableStateOf("") }
     var editObjetivo by remember { mutableStateOf("Hipertrofia") }
@@ -158,22 +166,34 @@ fun TelaPainelPrincipal(
         atualizarResumoSaude()
     }
 
-    val recarregarDados = {
-        escopo.launch {
+    // Carrega apenas o que ainda não estiver em cache (ou sincroniza do cache em 0ms)
+    LaunchedEffect(Unit) {
+        dataReferenciaHoje = RepositorioTreinoria.obterDataHojeIso()
+        // Se já temos cache populado (ex: usuário acabou de concluir treino ou editar ficha),
+        // apenas lê direto da memória sem fazer chamadas repetidas na rede!
+        if (RepositorioTreinoria.cachePerfil != null && RepositorioTreinoria.cacheFichas.isNotEmpty()) {
+            perfil = RepositorioTreinoria.cachePerfil
+            avatarBitmap = RepositorioTreinoria.cacheAvatarBitmap
+            fichas = RepositorioTreinoria.cacheFichas
+            sessoes = RepositorioTreinoria.cacheSessoes
+            mapaFadigaMuscular = RepositorioTreinoria.cacheMapaFadiga
+            habitoHoje = RepositorioTreinoria.obterHabitoHoje(forcarAtualizacao = false)
+            carregando = false
+            resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
+        } else {
             carregando = true
             try {
-                dataReferenciaHoje = RepositorioTreinoria.obterDataHojeIso()
                 RepositorioTreinoria.garantirDadosIniciaisUsuario()
-                val perfilCarregado = RepositorioTreinoria.carregarPerfil()
+                val perfilCarregado = RepositorioTreinoria.carregarPerfil(forcarAtualizacao = false)
                 perfil = perfilCarregado
                 if (!perfilCarregado?.avatarUrl.isNullOrBlank()) {
                     val baixado = RepositorioTreinoria.baixarBitmapPorUrl(perfilCarregado?.avatarUrl)
                     if (baixado != null) avatarBitmap = baixado
                 }
-                fichas = RepositorioTreinoria.listarFichasTreino()
-                sessoes = RepositorioTreinoria.listarSessoesRecentes(15)
-                habitoHoje = RepositorioTreinoria.obterHabitoHoje()
-                mapaFadigaMuscular = RepositorioTreinoria.calcularMapaFadigaMuscular()
+                fichas = RepositorioTreinoria.listarFichasTreino(forcarAtualizacao = false)
+                sessoes = RepositorioTreinoria.listarSessoesRecentes(15, forcarAtualizacao = false)
+                habitoHoje = RepositorioTreinoria.obterHabitoHoje(forcarAtualizacao = false)
+                mapaFadigaMuscular = RepositorioTreinoria.calcularMapaFadigaMuscular(forcarAtualizacao = false)
                 resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
             } finally {
                 carregando = false
@@ -181,29 +201,14 @@ fun TelaPainelPrincipal(
         }
     }
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val hojeAgora = RepositorioTreinoria.obterDataHojeIso()
-                if (habitoHoje.logDate.take(10) != hojeAgora) {
-                    habitoHoje = HabitoDiarioDto(logDate = hojeAgora)
-                }
-                recarregarDados()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
+    // Vigilante silencioso de virada de dia (00:00) para resetar a Hidratação & Suplementos
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000)
             val hojeAgora = RepositorioTreinoria.obterDataHojeIso()
             if (hojeAgora != dataReferenciaHoje || habitoHoje.logDate.take(10) != hojeAgora) {
                 dataReferenciaHoje = hojeAgora
-                habitoHoje = RepositorioTreinoria.obterHabitoHoje()
+                habitoHoje = RepositorioTreinoria.obterHabitoHoje(forcarAtualizacao = true)
             }
         }
     }
@@ -253,7 +258,6 @@ fun TelaPainelPrincipal(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Bloco da Foto de Perfil
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = FundoAcademia,
@@ -513,7 +517,12 @@ fun TelaPainelPrincipal(
                                 )
                             }
                         }
-                        IconButton(onClick = aoFazerLogout) {
+                        IconButton(
+                            onClick = {
+                                RepositorioTreinoria.limparTodoCache()
+                                aoFazerLogout()
+                            }
+                        ) {
                             Icon(Icons.Default.Logout, contentDescription = "Sair", tint = TextoSecundario)
                         }
                     }
@@ -1104,7 +1113,7 @@ fun TelaPainelPrincipal(
             }
         }
 
-        // MAPA CORPORAL 2D DE FADIGA & RECUPERAÇÃO MUSCULAR (Idêntico ao Web App!)
+        // MAPA CORPORAL 2D DE FADIGA & RECUPERAÇÃO MUSCULAR
         item {
             MapaCorporalFadigaCard(mapaStatus = mapaFadigaMuscular)
         }

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.launch
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -49,11 +50,19 @@ fun TelaNutricaoEvolucao() {
     val escopo = rememberCoroutineScope()
     var abaInterna by remember { mutableStateOf(0) } // 0 = Nutrição IA, 1 = Medidas & Evolução
 
-    var refeicoes by remember { mutableStateOf<List<RefeicaoLogDto>>(emptyList()) }
-    var medidas by remember { mutableStateOf<List<MedidaCorporalDto>>(emptyList()) }
-    var carregando by remember { mutableStateOf(true) }
+    // Inicializa instantaneamente a partir do Cache em Memória!
+    var refeicoes by remember {
+        mutableStateOf<List<RefeicaoLogDto>>(RepositorioTreinoria.cacheRefeicoes)
+    }
+    var medidas by remember {
+        mutableStateOf<List<MedidaCorporalDto>>(RepositorioTreinoria.cacheMedidas)
+    }
+    var carregando by remember {
+        mutableStateOf(
+            RepositorioTreinoria.cacheRefeicoes.isEmpty() && RepositorioTreinoria.cacheMedidas.isEmpty()
+        )
+    }
 
-    // Campos Nutrição IA (Foto + Texto)
     var tipoRefeicao by remember { mutableStateOf("Pós-Treino") }
     var descricaoPrato by remember { mutableStateOf("") }
     var fotoCapturadaBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -85,7 +94,6 @@ fun TelaNutricaoEvolucao() {
         }
     }
 
-    // Campos Medidas Corporais
     var pesoKg by remember { mutableStateOf("") }
     var bfPct by remember { mutableStateOf("") }
     var bracoCm by remember { mutableStateOf("") }
@@ -94,25 +102,22 @@ fun TelaNutricaoEvolucao() {
     var coxaCm by remember { mutableStateOf("") }
     var salvandoMedida by remember { mutableStateOf(false) }
 
-    val recarregar = {
+    val recarregar = { forcar: Boolean ->
         escopo.launch {
-            carregando = true
-            refeicoes = RepositorioTreinoria.listarRefeicoesRecentes()
-            medidas = RepositorioTreinoria.listarMedidasCorporais()
-            val saude = GerenciadorHealthConnect.lerResumoDiario(contexto)
-            if (pesoKg.isBlank() && saude.ultimoPesoKg != null && saude.ultimoPesoKg > 0) {
-                pesoKg = saude.ultimoPesoKg.toString()
+            if (refeicoes.isEmpty() && medidas.isEmpty()) carregando = true
+            refeicoes = RepositorioTreinoria.listarRefeicoesRecentes(forcarAtualizacao = forcar)
+            medidas = RepositorioTreinoria.listarMedidasCorporais(forcarAtualizacao = forcar)
+            val resumoSaude = GerenciadorHealthConnect.lerResumoDiario(contexto)
+            if (pesoKg.isBlank() && resumoSaude.ultimoPesoKg != null && resumoSaude.ultimoPesoKg > 0) {
+                pesoKg = resumoSaude.ultimoPesoKg.toString()
             }
             carregando = false
         }
     }
 
     LaunchedEffect(Unit) {
-        recarregar()
+        recarregar(false)
     }
-
-    val kcalHoje = remember(refeicoes) { refeicoes.take(5).sumOf { it.caloriesKcal } }
-    val proteinaHoje = remember(refeicoes) { refeicoes.take(5).sumOf { it.proteinG }.toInt() }
 
     LazyColumn(
         modifier = Modifier
@@ -144,73 +149,34 @@ fun TelaNutricaoEvolucao() {
 
         if (abaInterna == 0) {
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    Surface(shape = RoundedCornerShape(16.dp), color = SuperficieCard, modifier = Modifier.weight(1f)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Calorias Recentes", fontSize = 11.sp, color = TextoSecundario)
-                            Text("$kcalHoje kcal", fontSize = 20.sp, fontWeight = FontWeight.Black, color = AmbarDestaque)
-                        }
-                    }
-                    Surface(shape = RoundedCornerShape(16.dp), color = SuperficieCard, modifier = Modifier.weight(1f)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Proteína Acumulada", fontSize = 11.sp, color = TextoSecundario)
-                            Text("${proteinaHoje}g", fontSize = 20.sp, fontWeight = FontWeight.Black, color = VerdeEsmeralda)
-                        }
-                    }
-                }
-            }
-
-            item {
                 Surface(shape = RoundedCornerShape(18.dp), color = SuperficieCard, modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Scanner de Prato por Câmera ou Texto (IA)", fontWeight = FontWeight.Black, fontSize = 16.sp)
                         Text(
-                            "Scanner IA de Prato, Suplemento & Rótulo",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 15.sp,
-                            color = VerdeEsmeralda
-                        )
-                        Text(
-                            "Tire uma foto do seu prato ou suplemento (ou descreva abaixo) para o Coach IA calcular Calorias, Proteínas, Carboidratos e Gorduras:",
+                            "Tire uma foto do seu prato, escolha da galeria ou descreva o que comeu para calcular os macros com Gemini 2.5 Vision:",
                             fontSize = 12.sp,
                             color = TextoSecundario
                         )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            listOf("Pré-Treino", "Pós-Treino", "Refeição").forEach { tipo ->
-                                FilterChip(
-                                    selected = tipoRefeicao == tipo,
-                                    onClick = { tipoRefeicao = tipo },
-                                    label = { Text(tipo, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Button(
-                                onClick = { cameraLauncher.launch(null) },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = CianoNeon),
-                                modifier = Modifier.weight(1f).height(48.dp)
+                            FilledTonalButton(
+                                onClick = { cameraLauncher.launch() },
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = VerdeEsmeralda)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Tirar Foto", fontWeight = FontWeight.Black, fontSize = 13.sp)
+                                Text("Tirar Foto", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
-
                             OutlinedButton(
                                 onClick = { galeriaLauncher.launch("image/*") },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f).height(48.dp)
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Image, contentDescription = null, tint = CianoNeon)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Da Galeria", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = VerdeEsmeralda)
+                                Text("Galeria", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
                         }
 
@@ -218,9 +184,8 @@ fun TelaNutricaoEvolucao() {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(190.dp)
+                                    .height(170.dp)
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(FundoAcademia)
                             ) {
                                 Image(
                                     bitmap = fotoCapturadaBitmap!!.asImageBitmap(),
@@ -230,10 +195,7 @@ fun TelaNutricaoEvolucao() {
                                 )
                                 IconButton(
                                     onClick = { fotoCapturadaBitmap = null },
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(6.dp)
-                                        .background(FundoAcademia.copy(alpha = 0.75f), RoundedCornerShape(50))
+                                    modifier = Modifier.align(Alignment.TopEnd)
                                 ) {
                                     Icon(Icons.Default.Close, contentDescription = "Remover foto", tint = VermelhoAlerta)
                                 }
@@ -246,9 +208,9 @@ fun TelaNutricaoEvolucao() {
                             label = {
                                 Text(
                                     if (fotoCapturadaBitmap != null)
-                                        "Observação opcional (ex: 200g arroz + 180g frango)"
+                                        "Observação opcional (ex: 200g arroz + frango)"
                                     else
-                                        "Ou descreva o que você comeu..."
+                                        "Ou descreva o prato (ex: 180g frango, 200g arroz, 2 ovos)"
                                 )
                             },
                             modifier = Modifier.fillMaxWidth()
@@ -267,62 +229,62 @@ fun TelaNutricaoEvolucao() {
                             enabled = !analisandoPrato && (fotoCapturadaBitmap != null || descricaoPrato.isNotBlank()),
                             onClick = {
                                 analisandoPrato = true
-                                mensagemScanner = "🤖 IA analisando alimentos e calculando macronutrientes..."
+                                mensagemScanner = null
                                 escopo.launch {
                                     if (fotoCapturadaBitmap != null) {
                                         val b64 = bitmapParaBase64(fotoCapturadaBitmap!!)
-                                        val resultadoFoto = RepositorioTreinoria.analisarFotoPratoComIa(
+                                        val resultado = RepositorioTreinoria.analisarFotoPratoComIa(
                                             imagemBase64 = b64,
                                             tipoRefeicao = tipoRefeicao,
-                                            descricaoExtra = descricaoPrato.trim()
+                                            descricaoExtra = descricaoPrato
                                         )
                                         RepositorioTreinoria.registrarRefeicao(
                                             tipoRefeicao = tipoRefeicao,
-                                            titulo = resultadoFoto.dishName,
-                                            calorias = resultadoFoto.caloriesKcal,
-                                            proteinaG = resultadoFoto.proteinG,
-                                            carboG = resultadoFoto.carbsG,
-                                            gorduraG = resultadoFoto.fatG,
-                                            feedbackIa = resultadoFoto.aiFeedback,
-                                            adherenceScore = resultadoFoto.adherenceScore
+                                            titulo = resultado.dishName,
+                                            calorias = resultado.caloriesKcal,
+                                            proteinaG = resultado.proteinG,
+                                            carboG = resultado.carbsG,
+                                            gorduraG = resultado.fatG,
+                                            feedbackIa = resultado.aiFeedback,
+                                            adherenceScore = resultado.adherenceScore
                                         )
+                                        fotoCapturadaBitmap = null
+                                        descricaoPrato = ""
+                                        mensagemScanner = "✅ Foto analisada e salva: ${resultado.dishName} (${resultado.caloriesKcal} kcal)!"
                                     } else {
-                                        val resp = RepositorioTreinoria.consultarCoachIa(
-                                            "Estime os macronutrientes desta refeição ($tipoRefeicao): '$descricaoPrato'. " +
-                                                "Responda APENAS um JSON puro sem markdown no formato: " +
-                                                "{\"calories\": 550, \"protein_g\": 42, \"carbs_g\": 55, \"fat_g\": 14, \"feedback\": \"Excelente aporte proteico pós-treino!\"}"
+                                        val respIa = RepositorioTreinoria.consultarCoachIa(
+                                            "Estime macronutrientes para: '$descricaoPrato'. Retorne SOMENTE um JSON válido no formato: " +
+                                                "{\"calorias\":550,\"proteina\":42,\"carbo\":58,\"gordura\":12,\"feedback\":\"Ótima refeição pós-treino!\"}"
                                         )
-                                        var kcal = 480
-                                        var prot = 38.0
-                                        var carb = 45.0
-                                        var fat = 12.0
-                                        var fb = resp
+                                        val limpo = respIa.substringAfter("{").substringBeforeLast("}")
+                                        var cal = 520
+                                        var prot = 40.0
+                                        var carb = 55.0
+                                        var gord = 14.0
+                                        var fb = "Excelente aporte proteico para hipertrofia!"
                                         try {
-                                            val limpo = resp.substringAfter("{").substringBeforeLast("}")
                                             val obj = JSONObject("{$limpo}")
-                                            kcal = obj.optInt("calories", 480)
-                                            prot = obj.optDouble("protein_g", 38.0)
-                                            carb = obj.optDouble("carbs_g", 45.0)
-                                            fat = obj.optDouble("fat_g", 12.0)
-                                            fb = obj.optString("feedback", resp)
+                                            cal = obj.optInt("calorias", 520)
+                                            prot = obj.optDouble("proteina", 40.0)
+                                            carb = obj.optDouble("carbo", 55.0)
+                                            gord = obj.optDouble("gordura", 14.0)
+                                            fb = obj.optString("feedback", fb)
                                         } catch (_: Exception) {}
 
                                         RepositorioTreinoria.registrarRefeicao(
                                             tipoRefeicao = tipoRefeicao,
-                                            titulo = descricaoPrato.trim(),
-                                            calorias = kcal,
+                                            titulo = descricaoPrato,
+                                            calorias = cal,
                                             proteinaG = prot,
                                             carboG = carb,
-                                            gorduraG = fat,
+                                            gorduraG = gord,
                                             feedbackIa = fb
                                         )
+                                        descricaoPrato = ""
+                                        mensagemScanner = "✅ Refeição calculada e salva ($cal kcal)!"
                                     }
-
-                                    fotoCapturadaBitmap = null
-                                    descricaoPrato = ""
                                     analisandoPrato = false
-                                    mensagemScanner = "✅ Refeição analisada e registrada com sucesso!"
-                                    recarregar()
+                                    refeicoes = RepositorioTreinoria.cacheRefeicoes
                                 }
                             },
                             shape = RoundedCornerShape(14.dp),
@@ -332,11 +294,14 @@ fun TelaNutricaoEvolucao() {
                             if (analisandoPrato) {
                                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Analisando Prato com IA...", fontWeight = FontWeight.Black)
+                                Text("Coach IA analisando prato...")
                             } else {
                                 Icon(Icons.Default.AutoAwesome, contentDescription = null)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Escanear com IA & Salvar Refeição", fontWeight = FontWeight.Black)
+                                Text(
+                                    if (fotoCapturadaBitmap != null) "Escanear Foto com IA & Salvar" else "Analisar com IA & Salvar",
+                                    fontWeight = FontWeight.Black
+                                )
                             }
                         }
                     }
@@ -345,41 +310,25 @@ fun TelaNutricaoEvolucao() {
 
             items(refeicoes, key = { it.id }) { ref ->
                 Surface(shape = RoundedCornerShape(16.dp), color = SuperficieCard, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "[${ref.mealType}] ${ref.dishName}",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text("${ref.caloriesKcal} kcal", fontWeight = FontWeight.Black, color = AmbarDestaque, fontSize = 14.sp)
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(ref.dishName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("🔥 ${ref.caloriesKcal} kcal", color = AmbarDestaque, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("🥩 ${ref.proteinG.toInt()}g Prot", color = VerdeEsmeralda, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("🍚 ${ref.carbsG.toInt()}g Carb", color = CianoNeon, fontSize = 12.sp)
+                            Text("🥑 ${ref.fatG.toInt()}g Gord", color = TextoSecundario, fontSize = 12.sp)
                         }
-                        Text(
-                            "🥩 Prot: ${ref.proteinG.toInt()}g • 🍚 Carb: ${ref.carbsG.toInt()}g • 🥑 Gord: ${ref.fatG.toInt()}g",
-                            fontSize = 12.sp,
-                            color = VerdeEsmeraldaClaro
-                        )
                         if (!ref.aiFeedback.isNullOrBlank()) {
-                            Text(ref.aiFeedback, fontSize = 11.sp, color = TextoSecundario)
+                            Text("🤖 ${ref.aiFeedback}", fontSize = 11.sp, color = TextoSecundario)
                         }
                     }
                 }
             }
         } else {
-            // Aba 1: Medidas Corporais & Evolução (Sincronizado com Health Connect!)
             item {
                 Surface(shape = RoundedCornerShape(18.dp), color = SuperficieCard, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            "Registrar Nova Avaliação Corporal",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 15.sp,
-                            color = CianoNeon
-                        )
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Registrar Medidas Corporais", fontWeight = FontWeight.Black, fontSize = 16.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
                                 value = pesoKg,
@@ -400,9 +349,9 @@ fun TelaNutricaoEvolucao() {
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
-                                value = bracoCm,
-                                onValueChange = { bracoCm = it },
-                                label = { Text("Braço (cm)") },
+                                value = peitoCm,
+                                onValueChange = { peitoCm = it },
+                                label = { Text("Peitoral (cm)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
@@ -418,9 +367,9 @@ fun TelaNutricaoEvolucao() {
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
-                                value = peitoCm,
-                                onValueChange = { peitoCm = it },
-                                label = { Text("Peitoral (cm)") },
+                                value = bracoCm,
+                                onValueChange = { bracoCm = it },
+                                label = { Text("Braço (cm)") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
@@ -434,29 +383,28 @@ fun TelaNutricaoEvolucao() {
                                 modifier = Modifier.weight(1f)
                             )
                         }
-
                         Button(
                             enabled = !salvandoMedida && pesoKg.isNotBlank(),
                             onClick = {
                                 salvandoMedida = true
                                 escopo.launch {
-                                    val pDouble = pesoKg.toDoubleOrNull()
+                                    val pVal = pesoKg.replace(",", ".").toDoubleOrNull()
                                     RepositorioTreinoria.salvarMedidaCorporal(
-                                        pesoKg = pDouble,
-                                        bfPct = bfPct.toDoubleOrNull(),
-                                        peitoCm = peitoCm.toDoubleOrNull(),
-                                        cinturaCm = cinturaCm.toDoubleOrNull(),
-                                        bracoCm = bracoCm.toDoubleOrNull(),
-                                        coxaCm = coxaCm.toDoubleOrNull(),
-                                        notas = "Registrado pelo App Android"
+                                        pesoKg = pVal,
+                                        bfPct = bfPct.replace(",", ".").toDoubleOrNull(),
+                                        peitoCm = peitoCm.replace(",", ".").toDoubleOrNull(),
+                                        cinturaCm = cinturaCm.replace(",", ".").toDoubleOrNull(),
+                                        bracoCm = bracoCm.replace(",", ".").toDoubleOrNull(),
+                                        coxaCm = coxaCm.replace(",", ".").toDoubleOrNull(),
+                                        notas = "Registrado via App Android"
                                     )
-                                    if (pDouble != null && pDouble > 0) {
-                                        GerenciadorHealthConnect.gravarPesoCorporal(contexto, pDouble)
+                                    if (pVal != null && pVal > 0) {
+                                        GerenciadorHealthConnect.gravarPesoCorporal(contexto, pVal)
                                     }
                                     pesoKg = ""
                                     bfPct = ""
                                     salvandoMedida = false
-                                    recarregar()
+                                    medidas = RepositorioTreinoria.cacheMedidas
                                 }
                             },
                             shape = RoundedCornerShape(14.dp),
@@ -477,17 +425,17 @@ fun TelaNutricaoEvolucao() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("Data: ${m.measuredAt}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("📅 ${m.measuredAt}", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
-                                "Braço: ${m.armsCm ?: "-"}cm • Cintura: ${m.waistCm ?: "-"}cm • Peito: ${m.chestCm ?: "-"}cm",
+                                "Peito: ${m.chestCm ?: "-"}cm • Cintura: ${m.waistCm ?: "-"}cm • Braço: ${m.armsCm ?: "-"}cm",
                                 fontSize = 11.sp,
                                 color = TextoSecundario
                             )
                         }
                         Column(horizontalAlignment = Alignment.End) {
-                            Text("${m.weightKg ?: "-"} kg", fontWeight = FontWeight.Black, fontSize = 15.sp, color = VerdeEsmeralda)
+                            Text("${m.weightKg ?: "-"} kg", fontWeight = FontWeight.Black, color = VerdeEsmeralda, fontSize = 15.sp)
                             if (m.bodyFatPct != null) {
-                                Text("BF ${m.bodyFatPct}%", fontSize = 11.sp, color = CianoNeon)
+                                Text("${m.bodyFatPct}% BF", fontSize = 11.sp, color = CianoNeon, fontWeight = FontWeight.Bold)
                             }
                         }
                     }

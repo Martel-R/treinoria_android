@@ -31,12 +31,21 @@ fun TelaPersonalEConstrutor() {
     val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
-    var perfil by remember { mutableStateOf<PerfilDto?>(null) }
+    // Inicializa instantaneamente a partir do Cache em Memória!
+    var perfil by remember { mutableStateOf<PerfilDto?>(RepositorioTreinoria.cachePerfil) }
     var abaSelecionada by remember { mutableStateOf(0) }
-    var alunos by remember { mutableStateOf<List<VinculoAlunoPersonalDto>>(emptyList()) }
-    var minhasFichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
-    var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(emptyList()) }
-    var carregando by remember { mutableStateOf(true) }
+    var alunos by remember {
+        mutableStateOf<List<VinculoAlunoPersonalDto>>(RepositorioTreinoria.cacheAlunosPersonal)
+    }
+    var minhasFichas by remember {
+        mutableStateOf<List<FichaTreinoDto>>(RepositorioTreinoria.cacheFichas)
+    }
+    var catalogoExercicios by remember {
+        mutableStateOf<List<ExercicioDto>>(RepositorioTreinoria.cacheExercicios)
+    }
+    var carregando by remember {
+        mutableStateOf(RepositorioTreinoria.cacheFichas.isEmpty())
+    }
 
     val roleSalvoLocal = remember {
         try { GerenciadorSessao.obterInstancia().obterRoleSalva() } catch (_: Exception) { "athlete" }
@@ -46,7 +55,6 @@ fun TelaPersonalEConstrutor() {
         role == "trainer" || role == "gym" || role == "admin"
     }
 
-    // Modal Criar Nova Ficha (Com Gerador Inteligente por IA que lê TODO o histórico do usuário!)
     var exibirModalNovaFicha by remember { mutableStateOf(false) }
     var alunoAlvoPrescricao by remember { mutableStateOf<VinculoAlunoPersonalDto?>(null) }
     var promptGeradorIaFicha by remember {
@@ -66,35 +74,34 @@ fun TelaPersonalEConstrutor() {
     var salvandoFicha by remember { mutableStateOf(false) }
     var feedbackMensagem by remember { mutableStateOf<String?>(null) }
 
-    // Modal Novo Aluno do Personal
     var exibirModalNovoAluno by remember { mutableStateOf(false) }
     var nomeNovoAluno by remember { mutableStateOf("") }
     var emailNovoAluno by remember { mutableStateOf("") }
     var foneNovoAluno by remember { mutableStateOf("") }
     var objetivoNovoAluno by remember { mutableStateOf("Hipertrofia & Definição") }
 
-    val recarregar = {
+    val recarregar = { forcar: Boolean ->
         escopo.launch {
-            carregando = true
+            if (minhasFichas.isEmpty()) carregando = true
             RepositorioTreinoria.garantirDadosIniciaisUsuario()
-            perfil = RepositorioTreinoria.carregarPerfil()
-            minhasFichas = RepositorioTreinoria.listarFichasTreino()
+            perfil = RepositorioTreinoria.carregarPerfil(forcarAtualizacao = forcar)
+            minhasFichas = RepositorioTreinoria.listarFichasTreino(forcarAtualizacao = forcar)
             val roleAtual = (perfil?.accountRole ?: roleSalvoLocal).lowercase()
             if (roleAtual == "trainer" || roleAtual == "gym" || roleAtual == "admin") {
-                alunos = RepositorioTreinoria.listarAlunosPersonal()
+                alunos = RepositorioTreinoria.listarAlunosPersonal(forcarAtualizacao = forcar)
             } else {
                 abaSelecionada = 0
                 alunos = emptyList()
             }
             if (catalogoExercicios.isEmpty()) {
-                catalogoExercicios = RepositorioTreinoria.listarExercicios()
+                catalogoExercicios = RepositorioTreinoria.listarExercicios(forcarAtualizacao = false)
             }
             carregando = false
         }
     }
 
     LaunchedEffect(Unit) {
-        recarregar()
+        recarregar(false)
     }
 
     if (exibirModalNovoAluno && ehPersonalOuAcademia) {
@@ -161,7 +168,7 @@ fun TelaPersonalEConstrutor() {
                             foneNovoAluno = ""
                             emailNovoAluno = ""
                             exibirModalNovoAluno = false
-                            recarregar()
+                            recarregar(false)
                         }
                     }
                 ) {
@@ -195,7 +202,6 @@ fun TelaPersonalEConstrutor() {
                     modifier = Modifier.fillMaxWidth().heightIn(max = 490.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Box do Gerador por IA considerando todas as informações do usuário!
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = VerdeEsmeralda.copy(alpha = 0.12f),
@@ -382,8 +388,8 @@ fun TelaPersonalEConstrutor() {
                             salvandoFicha = false
                             exibirModalNovaFicha = false
                             exerciciosEscolhidosIds.clear()
+                            minhasFichas = RepositorioTreinoria.cacheFichas
                             feedbackMensagem = "✅ Ficha salva e sincronizada com sucesso!"
-                            recarregar()
                         }
                     }
                 ) {
@@ -492,7 +498,7 @@ fun TelaPersonalEConstrutor() {
                                 onClick = {
                                     escopo.launch {
                                         RepositorioTreinoria.excluirFicha(ficha.id)
-                                        recarregar()
+                                        minhasFichas = RepositorioTreinoria.cacheFichas
                                     }
                                 }
                             ) {
