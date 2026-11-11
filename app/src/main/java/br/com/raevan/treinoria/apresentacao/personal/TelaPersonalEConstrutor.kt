@@ -1,6 +1,7 @@
 package br.com.raevan.treinoria.apresentacao.personal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,28 +13,34 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
-import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
-import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
-import br.com.raevan.treinoria.dados.remoto.dto.VinculoAlunoPersonalDto
+import br.com.raevan.treinoria.dados.remoto.dto.*
+import br.com.raevan.treinoria.dados.repositorios.EstatisticaExercicioHistorico
 import br.com.raevan.treinoria.dados.repositorios.RepositorioTreinoria
+import br.com.raevan.treinoria.dados.repositorios.StatusMuscularInfo
 import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
+import br.com.raevan.treinoria.nucleo.componentes.MapaCorporalFadigaCard
 import br.com.raevan.treinoria.nucleo.tema.*
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
+/**
+ * Central de Avaliação de Desempenho & Evolução do Atleta + Acesso às Fichas de Treino
+ * (e Carteira Multi-Alunos para Personal Trainers).
+ */
 @Composable
 fun TelaPersonalEConstrutor() {
     val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
-    // Inicializa instantaneamente a partir do Cache em Memória!
+    // Inicialização Instantânea a partir do Cache em Memória (0ms!)
     var perfil by remember { mutableStateOf<PerfilDto?>(RepositorioTreinoria.cachePerfil) }
-    var abaSelecionada by remember { mutableStateOf(0) }
+    var abaSelecionada by remember { mutableStateOf(0) } // 0 = Desempenho & Evolução, 1 = Minhas Fichas, 2 = Carteira Personal
     var alunos by remember {
         mutableStateOf<List<VinculoAlunoPersonalDto>>(RepositorioTreinoria.cacheAlunosPersonal)
     }
@@ -43,9 +50,21 @@ fun TelaPersonalEConstrutor() {
     var catalogoExercicios by remember {
         mutableStateOf<List<ExercicioDto>>(RepositorioTreinoria.cacheExercicios)
     }
-    var carregando by remember {
-        mutableStateOf(RepositorioTreinoria.cacheFichas.isEmpty())
+    var sessoes by remember {
+        mutableStateOf<List<SessaoTreinoDto>>(RepositorioTreinoria.cacheSessoes)
     }
+    var estatisticasExercicios by remember {
+        mutableStateOf<Map<String, EstatisticaExercicioHistorico>>(RepositorioTreinoria.cacheEstatisticasExercicios)
+    }
+    var mapaFadiga by remember {
+        mutableStateOf<Map<String, StatusMuscularInfo>>(RepositorioTreinoria.cacheMapaFadiga)
+    }
+    var medidas by remember {
+        mutableStateOf<List<MedidaCorporalDto>>(RepositorioTreinoria.cacheMedidas)
+    }
+
+    var avaliandoDesempenhoIa by remember { mutableStateOf(false) }
+    var laudoDesempenhoIa by remember { mutableStateOf<String?>(null) }
 
     val roleSalvoLocal = remember {
         try { GerenciadorSessao.obterInstancia().obterRoleSalva() } catch (_: Exception) { "athlete" }
@@ -55,6 +74,7 @@ fun TelaPersonalEConstrutor() {
         role == "trainer" || role == "gym" || role == "admin"
     }
 
+    // Modal Criar Nova Ficha (Com Gerador Inteligente por IA)
     var exibirModalNovaFicha by remember { mutableStateOf(false) }
     var alunoAlvoPrescricao by remember { mutableStateOf<VinculoAlunoPersonalDto?>(null) }
     var promptGeradorIaFicha by remember {
@@ -82,26 +102,46 @@ fun TelaPersonalEConstrutor() {
 
     val recarregar = { forcar: Boolean ->
         escopo.launch {
-            if (minhasFichas.isEmpty()) carregando = true
             RepositorioTreinoria.garantirDadosIniciaisUsuario()
             perfil = RepositorioTreinoria.carregarPerfil(forcarAtualizacao = forcar)
             minhasFichas = RepositorioTreinoria.listarFichasTreino(forcarAtualizacao = forcar)
-            val roleAtual = (perfil?.accountRole ?: roleSalvoLocal).lowercase()
-            if (roleAtual == "trainer" || roleAtual == "gym" || roleAtual == "admin") {
-                alunos = RepositorioTreinoria.listarAlunosPersonal(forcarAtualizacao = forcar)
-            } else {
-                abaSelecionada = 0
-                alunos = emptyList()
-            }
+            sessoes = RepositorioTreinoria.listarSessoesRecentes(25, forcarAtualizacao = forcar)
+            estatisticasExercicios = RepositorioTreinoria.obterEstatisticasExercicios(forcarAtualizacao = forcar)
+            mapaFadiga = RepositorioTreinoria.calcularMapaFadigaMuscular(forcarAtualizacao = forcar)
+            medidas = RepositorioTreinoria.listarMedidasCorporais(forcarAtualizacao = forcar)
             if (catalogoExercicios.isEmpty()) {
                 catalogoExercicios = RepositorioTreinoria.listarExercicios(forcarAtualizacao = false)
             }
-            carregando = false
+            val roleAtual = (perfil?.accountRole ?: roleSalvoLocal).lowercase()
+            if (roleAtual == "trainer" || roleAtual == "gym" || roleAtual == "admin") {
+                alunos = RepositorioTreinoria.listarAlunosPersonal(forcarAtualizacao = forcar)
+            }
         }
     }
 
     LaunchedEffect(Unit) {
         recarregar(false)
+    }
+
+    // Métricas Consolidadas de Desempenho & Evolução
+    val volumeTotalHistorico = remember(sessoes) { sessoes.sumOf { it.totalVolumeKg }.toInt() }
+    val mediaVolumePorTreino = remember(sessoes) {
+        if (sessoes.isNotEmpty()) (volumeTotalHistorico / sessoes.size) else 0
+    }
+    val duracaoMediaMin = remember(sessoes) {
+        if (sessoes.isNotEmpty()) sessoes.mapNotNull { it.durationMinutes }.average().takeIf { !it.isNaN() }?.roundToInt() ?: 45 else 0
+    }
+    val mapaNomesExercicios = remember(catalogoExercicios) {
+        catalogoExercicios.associateBy { it.id }
+    }
+    val rankingPrs = remember(estatisticasExercicios, mapaNomesExercicios) {
+        estatisticasExercicios.entries
+            .map { (exId, st) ->
+                val ex = mapaNomesExercicios[exId]
+                val umRmEstimado = (st.maxWeightKg * (1.0 + (st.lastReps.coerceAtLeast(1) / 30.0))).roundToInt()
+                Triple(ex?.name ?: "Exercício", st, umRmEstimado)
+            }
+            .sortedByDescending { it.second.maxWeightKg }
     }
 
     if (exibirModalNovoAluno && ehPersonalOuAcademia) {
@@ -168,7 +208,7 @@ fun TelaPersonalEConstrutor() {
                             foneNovoAluno = ""
                             emailNovoAluno = ""
                             exibirModalNovoAluno = false
-                            recarregar(false)
+                            alunos = RepositorioTreinoria.cacheAlunosPersonal
                         }
                     }
                 ) {
@@ -410,34 +450,54 @@ fun TelaPersonalEConstrutor() {
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        if (ehPersonalOuAcademia) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+        // =====================================================================
+        // SELETOR SUPERIOR: [📊 Desempenho & Evolução] | [📋 Minhas Fichas] | ([👥 Alunos] se Personal)
+        // =====================================================================
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChip(
+                    selected = abaSelecionada == 0,
+                    onClick = { abaSelecionada = 0 },
+                    label = {
+                        Text(
+                            "📊 Desempenho & Evolução",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 11.sp
+                        )
+                    },
+                    modifier = Modifier.weight(1.25f)
+                )
+
+                FilterChip(
+                    selected = abaSelecionada == 1,
+                    onClick = { abaSelecionada = 1 },
+                    label = {
+                        Text(
+                            "📋 Fichas (${minhasFichas.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+
+                if (ehPersonalOuAcademia) {
                     FilterChip(
-                        selected = abaSelecionada == 0,
-                        onClick = { abaSelecionada = 0 },
-                        label = { Text("📋 Minhas Fichas (${minhasFichas.size})", fontWeight = FontWeight.Bold) },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilterChip(
-                        selected = abaSelecionada == 1,
-                        onClick = { abaSelecionada = 1 },
-                        label = { Text("👥 Carteira Personal (${alunos.size})", fontWeight = FontWeight.Bold) },
-                        modifier = Modifier.weight(1f)
+                        selected = abaSelecionada == 2,
+                        onClick = { abaSelecionada = 2 },
+                        label = {
+                            Text(
+                                "👥 Alunos (${alunos.size})",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        },
+                        modifier = Modifier.weight(0.95f)
                     )
                 }
-            }
-        } else {
-            item {
-                Text(
-                    text = "📋 Minhas Fichas de Treino (${minhasFichas.size})",
-                    fontWeight = FontWeight.Black,
-                    fontSize = 18.sp,
-                    color = VerdeEsmeralda
-                )
             }
         }
 
@@ -459,7 +519,365 @@ fun TelaPersonalEConstrutor() {
             }
         }
 
-        if (abaSelecionada == 0 || !ehPersonalOuAcademia) {
+        // =====================================================================
+        // ABA 0: AMBIENTE PRINCIPAL DE AVALIAÇÃO DE DESEMPENHO & EVOLUÇÃO DO USUÁRIO
+        // =====================================================================
+        if (abaSelecionada == 0) {
+            // Card de Acesso Rápido às Fichas + Botão de Avaliação de Desempenho com IA
+            item {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = SuperficieCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "📈 Central de Desempenho & Evolução",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 16.sp,
+                                    color = VerdeEsmeralda
+                                )
+                                Text(
+                                    text = "Acompanhe sua evolução de cargas, 1RM estimado, PRs, volume semanal e composição corporal",
+                                    fontSize = 11.sp,
+                                    color = TextoSecundario
+                                )
+                            }
+                            FilledTonalButton(
+                                onClick = { abaSelecionada = 1 },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Assignment, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Acessar Fichas", fontSize = 11.sp, fontWeight = FontWeight.Black, color = CianoNeon)
+                            }
+                        }
+
+                        Button(
+                            enabled = !avaliandoDesempenhoIa,
+                            onClick = {
+                                avaliandoDesempenhoIa = true
+                                escopo.launch {
+                                    laudoDesempenhoIa = RepositorioTreinoria.consultarCoachIa(
+                                        promptUsuario = "Faça uma Avaliação Completa de Desempenho e Evolução deste atleta em 4 tópicos curtos: " +
+                                            "(1) Evolução de Força e PRs; (2) Equilíbrio de Volume Semanal entre os músculos; " +
+                                            "(3) Evolução Corporal/Nutrição; e (4) Próxima Meta de Sobrecarga Progressiva para esta semana.",
+                                        context = contexto
+                                    )
+                                    avaliandoDesempenhoIa = false
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                            modifier = Modifier.fillMaxWidth().height(46.dp)
+                        ) {
+                            if (avaliandoDesempenhoIa) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Coach IA gerando Laudo de Desempenho...", fontSize = 12.sp, fontWeight = FontWeight.Black)
+                            } else {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Gerar Diagnóstico de Desempenho & Evolução com IA", fontSize = 12.sp, fontWeight = FontWeight.Black)
+                            }
+                        }
+
+                        if (laudoDesempenhoIa != null) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = FundoAcademia,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = laudoDesempenhoIa!!,
+                                    fontSize = 12.sp,
+                                    color = TextoPrimario,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4 KPIs de Performance Atlética
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = SuperficieCard,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Sessões", fontSize = 10.sp, color = TextoSecundario)
+                            Text(
+                                "${sessoes.size}",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                color = VerdeEsmeralda
+                            )
+                            Text("Meta: ${perfil?.weeklyGoal ?: 5}x/sem", fontSize = 10.sp, color = TextoSecundario)
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = SuperficieCard,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Tonelagem", fontSize = 10.sp, color = TextoSecundario)
+                            Text(
+                                "$volumeTotalHistorico kg",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                color = CianoNeon
+                            )
+                            Text("Média: $mediaVolumePorTreino kg/t", fontSize = 10.sp, color = TextoSecundario)
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = SuperficieCard,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Tempo Médio", fontSize = 10.sp, color = TextoSecundario)
+                            Text(
+                                "$duracaoMediaMin min",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                color = AmbarDestaque
+                            )
+                            Text("${rankingPrs.size} exercícios c/ PR", fontSize = 10.sp, color = TextoSecundario)
+                        }
+                    }
+                }
+            }
+
+            // Gráfico de Barras de Evolução de Volume por Sessão (Últimos Treinos)
+            if (sessoes.isNotEmpty()) {
+                item {
+                    val ultimasSessoesCronologicas = sessoes.take(7).reversed()
+                    val maiorVolume = (ultimasSessoesCronologicas.maxOfOrNull { it.totalVolumeKg } ?: 1.0).coerceAtLeast(1.0)
+
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = SuperficieCard,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "📊 Curva de Progressão de Volume por Treino",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 14.sp,
+                                color = TextoPrimario
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(130.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.Bottom
+                            ) {
+                                ultimasSessoesCronologicas.forEach { s ->
+                                    val frac = (s.totalVolumeKg / maiorVolume).toFloat().coerceIn(0.15f, 1f)
+                                    val dataCurta = if (s.startedAt.length >= 10) {
+                                        "${s.startedAt.substring(8, 10)}/${s.startedAt.substring(5, 7)}"
+                                    } else "Hoje"
+
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Bottom,
+                                        modifier = Modifier.fillMaxHeight()
+                                    ) {
+                                        Text(
+                                            text = "${s.totalVolumeKg.toInt()}kg",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CianoNeon
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .width(24.dp)
+                                                .fillMaxHeight(frac * 0.72f)
+                                                .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                                                .background(VerdeEsmeralda)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = dataCurta,
+                                            fontSize = 9.sp,
+                                            color = TextoSecundario
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Ranking de Força Máxima, Recordes Pessoais (PRs) e 1RM Estimado (Fórmula de Epley)
+            item {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = SuperficieCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "🏆 Recordes Pessoais (PRs) & 1RM Estimado",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 14.sp,
+                                color = AmbarDestaque
+                            )
+                            Text(
+                                text = "Fórmula de Epley",
+                                fontSize = 10.sp,
+                                color = TextoSecundario
+                            )
+                        }
+
+                        if (rankingPrs.isEmpty()) {
+                            Text(
+                                text = "Conclua seu primeiro treino para destravar seus Recordes Pessoais (PRs) e cálculo de 1RM!",
+                                fontSize = 12.sp,
+                                color = TextoSecundario
+                            )
+                        } else {
+                            rankingPrs.take(10).forEachIndexed { idx, (nomeEx, st, umRm) ->
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = FundoAcademia,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "${idx + 1}. $nomeEx",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = TextoPrimario
+                                            )
+                                            Text(
+                                                text = "Última: ${st.lastWeightKg.toInt()}kg × ${st.lastReps} reps",
+                                                fontSize = 11.sp,
+                                                color = TextoSecundario
+                                            )
+                                        }
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                text = "PR: ${st.maxWeightKg.toInt()} kg",
+                                                fontWeight = FontWeight.Black,
+                                                fontSize = 13.sp,
+                                                color = AmbarDestaque
+                                            )
+                                            Text(
+                                                text = "1RM Est.: $umRm kg",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = CianoNeon
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Mapa Corporal 2D de Fadiga & Volume Semanal por Grupo Muscular
+            item {
+                MapaCorporalFadigaCard(mapaStatus = mapaFadiga)
+            }
+
+            // Evolução Antropométrica Recente (Peso, BF%, Medidas)
+            if (medidas.isNotEmpty()) {
+                item {
+                    val mAtual = medidas.first()
+                    val mAnterior = medidas.getOrNull(1)
+                    val diffPeso = if (mAtual.weightKg != null && mAnterior?.weightKg != null) {
+                        mAtual.weightKg - mAnterior.weightKg
+                    } else null
+
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = SuperficieCard,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "📏 Evolução Corporal & Antropometria",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 14.sp,
+                                color = CianoNeon
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Peso Atual: ${mAtual.weightKg ?: "-"} kg" +
+                                        (if (diffPeso != null) " (${if (diffPeso >= 0) "+" else ""}${String.format("%.1f", diffPeso)} kg)" else ""),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = VerdeEsmeralda
+                                )
+                                Text(
+                                    text = "BF: ${mAtual.bodyFatPct ?: "-"}%",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = AmbarDestaque
+                                )
+                            }
+                            Text(
+                                text = "Peitoral: ${mAtual.chestCm ?: "-"}cm • Cintura: ${mAtual.waistCm ?: "-"}cm • Braço: ${mAtual.armsCm ?: "-"}cm • Coxa: ${mAtual.legsCm ?: "-"}cm",
+                                fontSize = 11.sp,
+                                color = TextoSecundario
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (abaSelecionada == 1) {
+            // =================================================================
+            // ABA 1: MINHAS FICHAS DE TREINO (Criação Manual ou com Coach IA)
+            // =================================================================
             item {
                 Button(
                     onClick = {
@@ -519,7 +937,10 @@ fun TelaPersonalEConstrutor() {
                     }
                 }
             }
-        } else if (ehPersonalOuAcademia) {
+        } else if (ehPersonalOuAcademia && abaSelecionada == 2) {
+            // =================================================================
+            // ABA 2: CARTEIRA MULTI-ALUNOS DO PERSONAL TRAINER
+            // =================================================================
             item {
                 Button(
                     onClick = { exibirModalNovoAluno = true },

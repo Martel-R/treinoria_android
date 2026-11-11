@@ -45,6 +45,7 @@ import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SerieSessaoDto
 import br.com.raevan.treinoria.dados.repositorios.*
 import br.com.raevan.treinoria.nucleo.componentes.BarraControleMidiaTelaCheia
+import br.com.raevan.treinoria.nucleo.componentes.DialogoCameraAoVivoCoachIa
 import br.com.raevan.treinoria.nucleo.componentes.GeradorCardTreinoStories
 import br.com.raevan.treinoria.nucleo.componentes.PlayerVideoNativoCard
 import br.com.raevan.treinoria.nucleo.componentes.ResumoExercicioCard
@@ -109,9 +110,11 @@ fun TelaTreinoAtivo(
     val escopo = rememberCoroutineScope()
 
     var fichaAtual by remember { mutableStateOf(fichaSelecionada) }
-    var perfil by remember { mutableStateOf<PerfilDto?>(null) }
-    var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(emptyList()) }
-    var estatisticasExercicios by remember { mutableStateOf<Map<String, EstatisticaExercicioHistorico>>(emptyMap()) }
+    var perfil by remember { mutableStateOf<PerfilDto?>(RepositorioTreinoria.cachePerfil) }
+    var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(RepositorioTreinoria.cacheExercicios) }
+    var estatisticasExercicios by remember {
+        mutableStateOf<Map<String, EstatisticaExercicioHistorico>>(RepositorioTreinoria.cacheEstatisticasExercicios)
+    }
 
     var segundosTreino by remember { mutableStateOf(0) }
     var treinoEmAndamento by remember { mutableStateOf(true) }
@@ -185,7 +188,10 @@ fun TelaTreinoAtivo(
     var presetCadencia by remember { mutableStateOf(CADENCE_PRESETS_ANDROID.first()) }
     var vozAtiva by remember { mutableStateOf(true) }
 
-    // Estado da Tela Inteira Minimalista (Agora com Controle de Mídia Integrado!)
+    // Estado da Câmera Ao Vivo com IA + Áudio Bidirecional (`DialogoCameraAoVivoCoachIa`)
+    var indiceSerieCameraAoVivoIa by remember { mutableStateOf<Int?>(null) }
+
+    // Estado da Tela Inteira Minimalista (com Controle de Mídia Integrado)
     var indiceSerieTelaInteira by remember { mutableStateOf<Int?>(null) }
     var faseTelaInteira by remember { mutableStateOf(FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) }
     var repAtualTelaInteira by remember { mutableStateOf(1) }
@@ -329,7 +335,6 @@ fun TelaTreinoAtivo(
     }
     val nomeDiaHoje = remember { RepositorioTreinoria.obterNomeDiaHoje() }
 
-    // Detecta PRs batidos na sessão atual
     val prsBatidosNaSessao = remember(seriesEstado.toList(), estatisticasExercicios) {
         val listaPrs = mutableListOf<Triple<String, Double, Int>>()
         seriesEstado.groupBy { it.exerciseId }.forEach { (exId, lista) ->
@@ -349,6 +354,47 @@ fun TelaTreinoAtivo(
             }
         }
         listaPrs
+    }
+
+    // =========================================================================
+    // MODAL DE CÂMERA AO VIVO COM IA + INTERAÇÃO POR ÁUDIO (Igual à Web!)
+    // =========================================================================
+    if (indiceSerieCameraAoVivoIa != null) {
+        val idxCam = indiceSerieCameraAoVivoIa!!
+        val serieCam = seriesEstado.getOrNull(idxCam)
+        if (serieCam != null) {
+            val totalSeriesDesteEx = seriesEstado.count { it.exerciseId == serieCam.exerciseId }.coerceAtLeast(1)
+            val proxIdx = seriesEstado.indices.firstOrNull { it > idxCam && !seriesEstado[it].completed }
+            val proxSerieObj = proxIdx?.let { seriesEstado.getOrNull(it) }
+
+            DialogoCameraAoVivoCoachIa(
+                nomeExercicio = serieCam.exerciseName,
+                grupoMuscular = serieCam.muscleGroup,
+                numeroSerie = serieCam.setNumber,
+                totalSeriesDoExercicio = totalSeriesDesteEx,
+                alvoRepsStr = serieCam.reps,
+                pesoKgStr = serieCam.weightKg,
+                descansoSegundos = serieCam.restSeconds,
+                presetCadencia = presetCadencia,
+                tts = tts,
+                vozInicialAtiva = vozAtiva,
+                aoConcluirSerie = { repsContadas ->
+                    if (idxCam in seriesEstado.indices) {
+                        seriesEstado[idxCam] = seriesEstado[idxCam].copy(
+                            reps = repsContadas.toString(),
+                            completed = true
+                        )
+                    }
+                    exercicioDescansoBarra = serieCam.exerciseName
+                    descansoBarraRapida = serieCam.restSeconds
+                },
+                aoAvancarParaProximaSerie = if (proxIdx != null) {
+                    { indiceSerieCameraAoVivoIa = proxIdx }
+                } else null,
+                proximaSerieDescricao = proxSerieObj?.let { "${it.exerciseName} • ${it.setNumber}ª Série (${it.weightKg}kg × ${it.reps}r)" },
+                aoFechar = { indiceSerieCameraAoVivoIa = null }
+            )
+        }
     }
 
     // =========================================================================
@@ -373,7 +419,6 @@ fun TelaTreinoAtivo(
                     modifier = Modifier.padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // Cabeçalho
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -398,7 +443,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // 3 KPIs do Resumo (Duração, Séries, Volume Total)
                     item {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
@@ -442,7 +486,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Celebração de PRs batidos na sessão (se houver)
                     if (prsBatidosNaSessao.isNotEmpty()) {
                         item {
                             Surface(
@@ -473,7 +516,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Seletor: Como você se sentiu no treino hoje? (4 opções idênticas à Web)
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
@@ -519,7 +561,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Foto Pós-Treino (Câmera ou Galeria)
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
@@ -565,7 +606,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Observações / Anotações
                     item {
                         OutlinedTextField(
                             value = notasSessao,
@@ -576,7 +616,6 @@ fun TelaTreinoAtivo(
                         )
                     }
 
-                    // Checkbox: Enviar Resumo + PRs + Pós-Treino no meu WhatsApp
                     item {
                         Surface(
                             shape = RoundedCornerShape(14.dp),
@@ -623,7 +662,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Botão: Gerar & Compartilhar Card HD p/ Stories (Estilo Strava/Hevy)
                     item {
                         OutlinedButton(
                             onClick = {
@@ -670,7 +708,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // Botão Principal de Confirmação
                     item {
                         Button(
                             enabled = !salvandoSessao,
@@ -1634,6 +1671,7 @@ fun TelaTreinoAtivo(
                     onClick = {
                         exibirConfirmacaoDescartar = false
                         indiceSerieTelaInteira = null
+                        indiceSerieCameraAoVivoIa = null
                         descansoBarraRapida = 0
                         segundosTreino = 0
                         seriesEstado.indices.forEach { i ->
@@ -1725,9 +1763,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // =========================================================================
-    // TELA INTEIRA DE CONTAGEM E DESCANSO + CONTROLE DE MÍDIA INTEGRADO!
-    // =========================================================================
+    // TELA INTEIRA DE CONTAGEM E DESCANSO + CONTROLE DE MÍDIA INTEGRADO
     if (indiceSerieTelaInteira != null) {
         val idxAtual = indiceSerieTelaInteira!!
         val serieAtual = seriesEstado.getOrNull(idxAtual)
@@ -1755,7 +1791,6 @@ fun TelaTreinoAtivo(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // Topo: Nome do Exercício + Série + Fechar
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1784,7 +1819,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Centro: Contagem de Repetições ou Cronômetro de Descanso
                         when (faseTelaInteira) {
                             FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES -> {
                                 Column(
@@ -1896,7 +1930,6 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        // Rodapé: Barra Nativa de Controle de Mídia (Spotify / YT Music) + Botão de Ação
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1975,7 +2008,6 @@ fun TelaTreinoAtivo(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 14.dp)
     ) {
-        // Cabeçalho Completo igual ao Web App: Treino do Dia + Coach IA + Concluir + Descartar + Barra de Descanso Rápido
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -2009,7 +2041,6 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    // 3 Botões de Topo idênticos ao cabeçalho do Web App: [Coach IA] [Descartar] [Concluir]
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2193,7 +2224,7 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Lista de Exercícios e Séries (Layout em 2 Linhas por Série igual ao Mobile Web)
+        // Lista de Exercícios e Séries (Agora com botão Câmera IA Live + Áudio em cada exercício e em cada série!)
         seriesAgrupadas.forEach { (chave, seriesDoExercicio) ->
             val (exId, nomeExercicio) = chave
             val primeiro = seriesDoExercicio.firstOrNull()
@@ -2299,22 +2330,58 @@ fun TelaTreinoAtivo(
                             }
                         }
 
+                        // Barra de Ações do Exercício: [📹 Câmera IA Live] [🎬 Vídeo] [🔄 Trocar] [🧮 Anilhas]
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = CianoNeon.copy(alpha = 0.18f),
+                                modifier = Modifier
+                                    .weight(1.25f)
+                                    .clickable {
+                                        val serieNaoConcluida = seriesDoExercicio.firstOrNull { !it.completed } ?: seriesDoExercicio.firstOrNull()
+                                        if (serieNaoConcluida != null) {
+                                            val idxAlvo = seriesEstado.indexOf(serieNaoConcluida)
+                                            if (idxAlvo >= 0) indiceSerieCameraAoVivoIa = idxAlvo
+                                        }
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Videocam,
+                                        contentDescription = "Câmera IA Live",
+                                        tint = CianoNeon,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "Câmera IA",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = CianoNeon,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
                             if (!videoUrl.isNullOrBlank()) {
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
                                     color = VerdeEsmeralda.copy(alpha = 0.14f),
                                     modifier = Modifier
-                                        .weight(1f)
+                                        .weight(0.95f)
                                         .clickable {
                                             exercicioComVideoAbertoId = if (videoAbertoNesteCard) null else exId
                                         }
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                         horizontalArrangement = Arrangement.Center,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
@@ -2324,7 +2391,7 @@ fun TelaTreinoAtivo(
                                             tint = VerdeEsmeralda,
                                             modifier = Modifier.size(15.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
                                         Text(
                                             text = if (videoAbertoNesteCard) "Fechar" else "Vídeo",
                                             fontSize = 11.sp,
@@ -2340,13 +2407,13 @@ fun TelaTreinoAtivo(
                                 shape = RoundedCornerShape(10.dp),
                                 color = AmbarDestaque.copy(alpha = 0.14f),
                                 modifier = Modifier
-                                    .weight(1.2f)
+                                    .weight(1.05f)
                                     .clickable {
                                         exercicioIdParaTrocarEquivalente = exId
                                     }
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -2356,9 +2423,9 @@ fun TelaTreinoAtivo(
                                         tint = AmbarDestaque,
                                         modifier = Modifier.size(15.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
                                     Text(
-                                        text = "Trocar Equiv.",
+                                        text = "Trocar",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = AmbarDestaque,
@@ -2371,7 +2438,7 @@ fun TelaTreinoAtivo(
                                 shape = RoundedCornerShape(10.dp),
                                 color = SuperficieElevada,
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .weight(0.95f)
                                     .clickable {
                                         pesoAlvoCalculadora = primeiro?.weightKg ?: "60"
                                         nomeExercicioCalculadora = nomeExercicio
@@ -2379,22 +2446,22 @@ fun TelaTreinoAtivo(
                                     }
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Calculate,
                                         contentDescription = null,
-                                        tint = CianoNeon,
+                                        tint = TextoPrimario,
                                         modifier = Modifier.size(15.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
                                     Text(
                                         text = "Anilhas",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = CianoNeon,
+                                        color = TextoPrimario,
                                         maxLines = 1
                                     )
                                 }
@@ -2485,8 +2552,42 @@ fun TelaTreinoAtivo(
 
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                                         ) {
+                                            // Botão Câmera IA Ao Vivo + Voz por Série
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = CianoNeon.copy(alpha = 0.18f),
+                                                modifier = Modifier
+                                                    .height(34.dp)
+                                                    .clickable {
+                                                        if (idxGlobal >= 0) {
+                                                            indiceSerieCameraAoVivoIa = idxGlobal
+                                                        }
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Videocam,
+                                                        contentDescription = "Câmera IA Live",
+                                                        tint = CianoNeon,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text(
+                                                        text = "Live IA",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Black,
+                                                        color = CianoNeon,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+
+                                            // Botão Guiar Contagem Tela Cheia
                                             Surface(
                                                 shape = RoundedCornerShape(10.dp),
                                                 color = RoxoDestaque.copy(alpha = 0.18f),
@@ -2499,19 +2600,19 @@ fun TelaTreinoAtivo(
                                                     }
                                             ) {
                                                 Row(
-                                                    modifier = Modifier.padding(horizontal = 10.dp),
+                                                    modifier = Modifier.padding(horizontal = 8.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Icon(
                                                         imageVector = Icons.Default.PlayArrow,
                                                         contentDescription = "Iniciar Contagem Tela Cheia",
                                                         tint = RoxoDestaque,
-                                                        modifier = Modifier.size(16.dp)
+                                                        modifier = Modifier.size(15.dp)
                                                     )
-                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Spacer(modifier = Modifier.width(2.dp))
                                                     Text(
-                                                        text = "Guiar ${serie.reps}r",
-                                                        fontSize = 11.sp,
+                                                        text = "${serie.reps}r",
+                                                        fontSize = 10.sp,
                                                         fontWeight = FontWeight.Black,
                                                         color = RoxoDestaque,
                                                         maxLines = 1
@@ -2542,7 +2643,7 @@ fun TelaTreinoAtivo(
                                                             imageVector = Icons.Default.Close,
                                                             contentDescription = "Remover série",
                                                             tint = TextoSecundario,
-                                                            modifier = Modifier.size(16.dp)
+                                                            modifier = Modifier.size(15.dp)
                                                         )
                                                     }
                                                 }
@@ -2565,7 +2666,7 @@ fun TelaTreinoAtivo(
                                                     }
                                             ) {
                                                 Row(
-                                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                                    modifier = Modifier.padding(horizontal = 10.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Icon(
@@ -2574,7 +2675,7 @@ fun TelaTreinoAtivo(
                                                         tint = if (serie.completed) FundoAcademia else TextoPrimario,
                                                         modifier = Modifier.size(15.dp)
                                                     )
-                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
                                                     Text(
                                                         text = if (serie.completed) "Feito" else "OK",
                                                         fontSize = 11.sp,
@@ -2834,7 +2935,6 @@ fun TelaTreinoAtivo(
             }
         }
 
-        // Botões Finais de Conclusão e Descarte (Abrem o Modal Completo igual ao Web App!)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(

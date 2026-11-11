@@ -3,8 +3,8 @@ package br.com.raevan.treinoria.apresentacao.navegacao
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -116,12 +116,12 @@ fun EstruturaNavegacaoPrincipal() {
                     DestinoNavegacao.itensBarraInferior.forEach { destino ->
                         val estaSelecionado = rotaAtual == destino.rota
                         val tituloAba = if (destino == DestinoNavegacao.PersonalHub) {
-                            if (ehPersonal) "Personal" else "Fichas"
+                            if (ehPersonal) "Personal" else "Desempenho"
                         } else {
                             destino.titulo
                         }
                         val iconeAba = if (destino == DestinoNavegacao.PersonalHub) {
-                            if (ehPersonal) Icons.Default.Groups else Icons.Default.Assignment
+                            if (ehPersonal) Icons.Default.Groups else Icons.Default.TrendingUp
                         } else {
                             destino.icone
                         }

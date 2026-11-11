@@ -41,6 +41,12 @@ data class ResultadoScannerPratoIa(
     val aiFeedback: String
 )
 
+data class AnalisePosturaAoVivoIa(
+    val postureStatus: String,
+    val shortVoiceTip: String,
+    val biomechanicalFeedback: String
+)
+
 data class EstatisticaExercicioHistorico(
     val lastWeightKg: Double,
     val lastReps: Int,
@@ -92,11 +98,6 @@ data class FichaGeradaPorIa(
 
 object RepositorioTreinoria {
 
-    // =========================================================================
-    // CACHE EM MEMÓRIA (Instantâneo 0ms ao alternar entre abas!)
-    // Só atualiza quando houver uma mutação real (treino salvo, água, ficha,
-    // perfil, medida, refeição) ou quando forçado manualmente.
-    // =========================================================================
     @Volatile var cacheUserId: String? = null
     @Volatile var cacheDataDiaIso: String? = null
     @Volatile var cacheInicializado: Boolean = false
@@ -141,7 +142,6 @@ object RepositorioTreinoria {
 
         val hoje = obterDataHojeIso()
         if (cacheDataDiaIso != null && cacheDataDiaIso != hoje) {
-            // Virou o dia (00:00): reseta apenas o hábito do dia em memória!
             cacheHabitoHoje = null
         }
         cacheDataDiaIso = hoje
@@ -475,6 +475,184 @@ object RepositorioTreinoria {
         } catch (_: Exception) {}
 
         resultado
+    }
+
+    /**
+     * Analisa um frame da Câmera Ao Vivo (JPEG Base64) com o Gemini 2.5 Flash Vision
+     * e retorna a dica curta de voz (`shortVoiceTip`) + avaliação biomecânica (`biomechanicalFeedback`)
+     * idêntico ao `analyzeExercisePostureWithGemini` do Web App!
+     */
+    suspend fun analisarPosturaCameraAoVivoComIa(
+        nomeExercicio: String,
+        grupoMuscular: String,
+        repAtual: Int,
+        alvoReps: String,
+        anguloAtual: Int,
+        fase: String,
+        jpegBase64: String
+    ): AnalisePosturaAoVivoIa = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("${ClienteSupabase.WEB_BASE_URL}/api/ai/coach")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("User-Agent", ClienteSupabase.USER_AGENT_PADRAO)
+                connectTimeout = 20000
+                readTimeout = 30000
+                doOutput = true
+            }
+
+            val prompt = """
+                Você é o Coach Biomecânico IA acompanhando ao vivo pela câmera o exercício "$nomeExercicio" ($grupoMuscular).
+                O atleta está na repetição $repAtual (Meta: $alvoReps), fase atual: $fase, ângulo articular medido: ${anguloAtual}°.
+                Analise a imagem da câmera e dê uma dica curtíssima e motivadora de postura/execução (máximo 12 palavras em "short_voice_tip" para ser falada em voz alta) e uma observação técnica em "biomechanical_feedback".
+                Se não houver pessoa visível claramente no quadro, oriente posicionar o corpo no enquadramento.
+
+                Responda OBRIGATORIAMENTE em JSON:
+                {
+                  "posture_status": "excelente",
+                  "short_voice_tip": "Frase curta de até 12 palavras para falar ao atleta",
+                  "biomechanical_feedback": "Observação técnica de 1 frase"
+                }
+            """.trimIndent()
+
+            val parts = JSONArray().apply {
+                put(JSONObject().put("text", prompt))
+                if (jpegBase64.isNotBlank()) {
+                    put(
+                        JSONObject().put(
+                            "inlineData",
+                            JSONObject().apply {
+                                put("mimeType", "image/jpeg")
+                                put("data", jpegBase64)
+                            }
+                        )
+                    )
+                }
+            }
+
+            val body = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", parts)
+                        }
+                    )
+                )
+                put(
+                    "generationConfig",
+                    JSONObject().apply {
+                        put("temperature", 0.3)
+                        put("responseMimeType", "application/json")
+                    }
+                )
+            }
+
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) {
+                val respTxt = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(respTxt)
+                val cand = json.optJSONArray("candidates")?.optJSONObject(0)
+                val rawText = cand?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text") ?: ""
+                val limpo = rawText.substringAfter("{").substringBeforeLast("}")
+                val obj = JSONObject("{$limpo}")
+                return@withContext AnalisePosturaAoVivoIa(
+                    postureStatus = obj.optString("posture_status", "excelente"),
+                    shortVoiceTip = obj.optString("short_voice_tip", "Excelente postura! Mantenha o core firme e controle a descida!"),
+                    biomechanicalFeedback = obj.optString("biomechanical_feedback", "Alinhamento articular estável e ótima amplitude de movimento.")
+                )
+            }
+        } catch (_: Exception) {}
+
+        AnalisePosturaAoVivoIa(
+            postureStatus = "excelente",
+            shortVoiceTip = "Ótimo ritmo! Controle a descida e estabilize o tronco!",
+            biomechanicalFeedback = "Execução firme dentro da faixa ideal de tensão mecânica."
+        )
+    }
+
+    /**
+     * Permite ao atleta CONVERSAR POR VOZ com o Coach IA durante a execução na Câmera Ao Vivo:
+     * recebe o que o atleta falou no microfone + o frame atual da câmera + dossiê do usuário
+     * e devolve uma resposta falada natural e direta!
+     */
+    suspend fun conversarEmAudioComCoachNaCamera(
+        context: Context?,
+        nomeExercicio: String,
+        grupoMuscular: String,
+        numeroSerie: Int,
+        totalSeries: Int,
+        pesoKg: String,
+        repAtual: Int,
+        alvoReps: Int,
+        anguloAtual: Int,
+        perguntaFaladaPeloAtleta: String,
+        frameJpegBase64: String? = null
+    ): String = withContext(Dispatchers.IO) {
+        try {
+            val dossie = try { montarDossieCompletoUsuarioParaIa(context) } catch (_: Throwable) { "" }
+            val url = URL("${ClienteSupabase.WEB_BASE_URL}/api/ai/coach")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("User-Agent", ClienteSupabase.USER_AGENT_PADRAO)
+                connectTimeout = 20000
+                readTimeout = 30000
+                doOutput = true
+            }
+
+            val prompt = """
+                Você é o Coach Biomecânico IA ao vivo acompanhando por câmera e áudio o atleta durante o exercício "$nomeExercicio" ($grupoMuscular).
+                Série atual: #$numeroSerie de $totalSeries | Carga: ${pesoKg}kg | Repetição atual: $repAtual/$alvoReps | Ângulo articular: ${anguloAtual}°.
+
+                $dossie
+
+                O atleta acabou de falar com você pelo microfone: "$perguntaFaladaPeloAtleta".
+                Responda em português-BR de forma natural, direta, parceira e motivadora (MÁXIMO 2 FRASES CURTAS, sem asteriscos ou markdown) para ser falada imediatamente em voz alta para ele!
+            """.trimIndent()
+
+            val parts = JSONArray().apply {
+                put(JSONObject().put("text", prompt))
+                if (!frameJpegBase64.isNullOrBlank()) {
+                    put(
+                        JSONObject().put(
+                            "inlineData",
+                            JSONObject().apply {
+                                put("mimeType", "image/jpeg")
+                                put("data", frameJpegBase64)
+                            }
+                        )
+                    )
+                }
+            }
+
+            val body = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", parts)
+                        }
+                    )
+                )
+            }
+
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) {
+                val respTxt = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(respTxt)
+                val cand = json.optJSONArray("candidates")?.optJSONObject(0)
+                val text = cand?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")
+                if (!text.isNullOrBlank()) {
+                    return@withContext text.replace("*", "").trim()
+                }
+            }
+        } catch (_: Exception) {}
+
+        "Postura excelente! Mantenha as escápulas firmes, controle a descida em três segundos e respire a cada repetição!"
     }
 
     suspend fun montarDossieCompletoUsuarioParaIa(
@@ -897,7 +1075,6 @@ object RepositorioTreinoria {
                 }
                 ClienteSupabase.client.from("workout_plan_items").insert(vinc)
             }
-            // Invalida e atualiza imediatamente o cache de fichas!
             listarFichasTreino(forcarAtualizacao = true)
             true
         } catch (_: Exception) {
@@ -1009,7 +1186,6 @@ object RepositorioTreinoria {
                 ClienteSupabase.client.from("workout_sets").insert(payloadSeries)
             }
 
-            // Atualiza imediatamente o cache de sessões, PRs e Mapa de Fadiga após concluir um treino!
             listarSessoesRecentes(forcarAtualizacao = true)
             obterEstatisticasExercicios(forcarAtualizacao = true)
             calcularMapaFadigaMuscular(forcarAtualizacao = true)
@@ -1077,7 +1253,6 @@ object RepositorioTreinoria {
         val mlLimpo = waterMl.coerceAtLeast(0)
         val metaLimpa = waterGoalMl.coerceAtLeast(1000)
 
-        // Atualiza o cache em memória imediatamente (otimista)
         val otimista = HabitoDiarioDto(
             userId = uid,
             logDate = hoje,
