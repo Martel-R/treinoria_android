@@ -2,6 +2,7 @@ package br.com.raevan.treinoria.dados.repositorios
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import br.com.raevan.treinoria.dados.rede.ClienteSupabase
 import br.com.raevan.treinoria.dados.remoto.dto.*
 import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
@@ -178,6 +179,86 @@ object RepositorioTreinoria {
             }
             perfil
         } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Faz upload da Foto de Perfil (Avatar) para o bucket `gym-images` do Supabase Storage,
+     * salva `avatar_url` na tabela `gym.profiles` e retorna a URL pública.
+     */
+    suspend fun enviarESalvarFotoPerfil(bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
+        val uid = obterUserIdAtual() ?: return@withContext null
+        try {
+            val stream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+            val bytes = stream.toByteArray()
+            val caminho = "$uid/avatars/avatar_${System.currentTimeMillis()}.jpg"
+            val bucket = ClienteSupabase.client.storage.from("gym-images")
+            bucket.upload(caminho, bytes) { upsert = true }
+            val urlPublica = bucket.publicUrl(caminho)
+
+            val payload = buildJsonObject {
+                put("avatar_url", urlPublica)
+                put("updated_at", OffsetDateTime.now().toString())
+            }
+            ClienteSupabase.client.from("profiles").update(payload) {
+                filter { eq("id", uid) }
+            }
+            urlPublica
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Atualiza as informações e metas do perfil do atleta na tabela `gym.profiles`.
+     */
+    suspend fun atualizarPerfilAtleta(
+        nome: String,
+        objetivo: String,
+        pesoKg: Double?,
+        alturaCm: Double?,
+        metaSemanalDias: Int,
+        descansoSegundos: Int,
+        avatarUrl: String?
+    ): PerfilDto? = withContext(Dispatchers.IO) {
+        val uid = obterUserIdAtual() ?: return@withContext null
+        try {
+            val payload = buildJsonObject {
+                put("name", nome.trim().ifBlank { "Atleta" })
+                put("goal", objetivo.trim().ifBlank { "Hipertrofia" })
+                if (pesoKg != null) put("weight_kg", pesoKg)
+                if (alturaCm != null) put("height_cm", alturaCm)
+                put("weekly_goal_days", metaSemanalDias.coerceIn(1, 7))
+                put("default_rest_seconds", descansoSegundos.coerceIn(15, 300))
+                if (avatarUrl != null) put("avatar_url", avatarUrl)
+                put("updated_at", OffsetDateTime.now().toString())
+            }
+            ClienteSupabase.client.from("profiles")
+                .update(payload) {
+                    filter { eq("id", uid) }
+                    select()
+                }
+                .decodeSingle<PerfilDto>()
+        } catch (_: Exception) {
+            carregarPerfil()
+        }
+    }
+
+    /**
+     * Baixa um Bitmap a partir de uma URL pública (para exibir a foto de perfil salva).
+     */
+    suspend fun baixarBitmapPorUrl(urlStr: String?): Bitmap? = withContext(Dispatchers.IO) {
+        if (urlStr.isNullOrBlank()) return@withContext null
+        try {
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10000
+                readTimeout = 15000
+                doInput = true
+            }
+            conn.inputStream.use { BitmapFactory.decodeStream(it) }
+        } catch (_: Throwable) {
             null
         }
     }
@@ -754,16 +835,13 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Faz upload da Foto Pós-Treino para o bucket `gym-images` do Supabase Storage e retorna a URL pública.
-     */
     suspend fun enviarFotoPosTreinoStorage(bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
         val uid = obterUserIdAtual() ?: return@withContext null
         try {
             val stream = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.JPEG, 82, stream)
             val bytes = stream.toByteArray()
-            val caminho = "workouts/$uid/treino_${System.currentTimeMillis()}.jpg"
+            val caminho = "$uid/workouts/treino_${System.currentTimeMillis()}.jpg"
             val bucket = ClienteSupabase.client.storage.from("gym-images")
             bucket.upload(caminho, bytes) { upsert = true }
             bucket.publicUrl(caminho)

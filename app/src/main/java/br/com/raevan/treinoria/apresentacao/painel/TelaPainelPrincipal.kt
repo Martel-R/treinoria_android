@@ -1,13 +1,23 @@
 package br.com.raevan.treinoria.apresentacao.painel
 
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.launch
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -15,8 +25,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.health.connect.client.PermissionController
@@ -53,6 +66,7 @@ fun TelaPainelPrincipal(
 
     var carregando by remember { mutableStateOf(true) }
     var perfil by remember { mutableStateOf<PerfilDto?>(null) }
+    var avatarBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var fichas by remember { mutableStateOf<List<FichaTreinoDto>>(emptyList()) }
     var sessoes by remember { mutableStateOf<List<SessaoTreinoDto>>(emptyList()) }
     var mapaFadigaMuscular by remember { mutableStateOf<Map<String, StatusMuscularInfo>>(emptyMap()) }
@@ -60,6 +74,17 @@ fun TelaPainelPrincipal(
     var habitoHoje by remember {
         mutableStateOf(HabitoDiarioDto(logDate = RepositorioTreinoria.obterDataHojeIso()))
     }
+
+    // Modal de Edição de Perfil & Foto de Perfil (Idêntico ao Web App!)
+    var exibirModalPerfil by remember { mutableStateOf(false) }
+    var editNome by remember { mutableStateOf("") }
+    var editObjetivo by remember { mutableStateOf("Hipertrofia") }
+    var editPeso by remember { mutableStateOf("") }
+    var editAltura by remember { mutableStateOf("") }
+    var editMetaDias by remember { mutableStateOf("5") }
+    var editDescansoSeg by remember { mutableStateOf("90") }
+    var enviandoFotoPerfil by remember { mutableStateOf(false) }
+    var salvandoPerfil by remember { mutableStateOf(false) }
 
     // Estado do Android Health Connect
     var resumoSaude by remember { mutableStateOf(ResumoSaudeDiaria()) }
@@ -73,6 +98,51 @@ fun TelaPainelPrincipal(
     var verificandoAtualizacao by remember { mutableStateOf(false) }
     var infoAtualizacaoManual by remember { mutableStateOf<InfoVersaoRemota?>(null) }
     var mensagemStatusAtualizacao by remember { mutableStateOf<String?>(null) }
+
+    val processarNovaFotoPerfil = { bmp: Bitmap ->
+        avatarBitmap = bmp
+        escopo.launch {
+            enviandoFotoPerfil = true
+            val novaUrl = RepositorioTreinoria.enviarESalvarFotoPerfil(bmp)
+            if (!novaUrl.isNullOrBlank()) {
+                perfil = perfil?.copy(avatarUrl = novaUrl)
+            }
+            enviandoFotoPerfil = false
+        }
+    }
+
+    val cameraAvatarLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bmp: Bitmap? ->
+        if (bmp != null) processarNovaFotoPerfil(bmp)
+    }
+
+    val galeriaAvatarLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(contexto.contentResolver, uri))
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Images.Media.getBitmap(contexto.contentResolver, uri)
+                }
+                processarNovaFotoPerfil(bmp.copy(Bitmap.Config.ARGB_8888, false))
+            } catch (_: Throwable) {}
+        }
+    }
+
+    val abrirModalPerfil = {
+        val p = perfil
+        editNome = p?.name ?: "Atleta"
+        editObjetivo = p?.goal ?: "Hipertrofia"
+        editPeso = p?.weightKg?.toString() ?: ""
+        editAltura = p?.heightCm?.toInt()?.toString() ?: ""
+        editMetaDias = (p?.weeklyGoal ?: 5).toString()
+        editDescansoSeg = (p?.defaultRestSeconds ?: 90).toString()
+        exibirModalPerfil = true
+    }
 
     val atualizarResumoSaude = {
         escopo.launch {
@@ -94,7 +164,12 @@ fun TelaPainelPrincipal(
             try {
                 dataReferenciaHoje = RepositorioTreinoria.obterDataHojeIso()
                 RepositorioTreinoria.garantirDadosIniciaisUsuario()
-                perfil = RepositorioTreinoria.carregarPerfil()
+                val perfilCarregado = RepositorioTreinoria.carregarPerfil()
+                perfil = perfilCarregado
+                if (!perfilCarregado?.avatarUrl.isNullOrBlank()) {
+                    val baixado = RepositorioTreinoria.baixarBitmapPorUrl(perfilCarregado?.avatarUrl)
+                    if (baixado != null) avatarBitmap = baixado
+                }
                 fichas = RepositorioTreinoria.listarFichasTreino()
                 sessoes = RepositorioTreinoria.listarSessoesRecentes(15)
                 habitoHoje = RepositorioTreinoria.obterHabitoHoje()
@@ -169,6 +244,176 @@ fun TelaPainelPrincipal(
         }
     }
 
+    // Modal de Edição de Perfil & Foto de Perfil
+    if (exibirModalPerfil) {
+        AlertDialog(
+            onDismissRequest = { if (!salvandoPerfil) exibirModalPerfil = false },
+            title = {
+                Text("📸 Perfil & Metas do Atleta", fontWeight = FontWeight.Black, fontSize = 18.sp)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Bloco da Foto de Perfil
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = FundoAcademia,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(VerdeEsmeralda.copy(alpha = 0.2f))
+                                    .border(2.dp, VerdeEsmeralda, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (avatarBitmap != null) {
+                                    Image(
+                                        bitmap = avatarBitmap!!.asImageBitmap(),
+                                        contentDescription = "Foto de Perfil",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = VerdeEsmeralda,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = if (enviandoFotoPerfil) "Enviando foto..." else "Foto de Perfil",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 13.sp,
+                                    color = TextoPrimario
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    FilledTonalButton(
+                                        enabled = !enviandoFotoPerfil,
+                                        onClick = { cameraAvatarLauncher.launch() },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Câmera", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    OutlinedButton(
+                                        enabled = !enviandoFotoPerfil,
+                                        onClick = { galeriaAvatarLauncher.launch("image/*") },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Galeria", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = editNome,
+                        onValueChange = { editNome = it },
+                        label = { Text("Nome") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = editObjetivo,
+                        onValueChange = { editObjetivo = it },
+                        label = { Text("Objetivo (ex: Hipertrofia, Força Pura, Cutting)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = editPeso,
+                            onValueChange = { editPeso = it },
+                            label = { Text("Peso (kg)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = editAltura,
+                            onValueChange = { editAltura = it },
+                            label = { Text("Altura (cm)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = editMetaDias,
+                            onValueChange = { editMetaDias = it },
+                            label = { Text("Meta (dias/sem)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = editDescansoSeg,
+                            onValueChange = { editDescansoSeg = it },
+                            label = { Text("Descanso (s)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !salvandoPerfil && !enviandoFotoPerfil,
+                    onClick = {
+                        salvandoPerfil = true
+                        escopo.launch {
+                            val atualizado = RepositorioTreinoria.atualizarPerfilAtleta(
+                                nome = editNome,
+                                objetivo = editObjetivo,
+                                pesoKg = editPeso.replace(",", ".").toDoubleOrNull(),
+                                alturaCm = editAltura.replace(",", ".").toDoubleOrNull(),
+                                metaSemanalDias = editMetaDias.toIntOrNull() ?: 5,
+                                descansoSegundos = editDescansoSeg.toIntOrNull() ?: 90,
+                                avatarUrl = perfil?.avatarUrl
+                            )
+                            if (atualizado != null) perfil = atualizado
+                            salvandoPerfil = false
+                            exibirModalPerfil = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda)
+                ) {
+                    Text(
+                        if (salvandoPerfil) "Salvando..." else "Salvar Perfil",
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { exibirModalPerfil = false }) { Text("Fechar") }
+            }
+        )
+    }
+
     if (infoAtualizacaoManual != null) {
         DialogoAtualizacaoApp(
             infoRemota = infoAtualizacaoManual!!,
@@ -197,7 +442,7 @@ fun TelaPainelPrincipal(
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        // Cabeçalho do Atleta / Personal + Botão Verificar Atualização + Logout
+        // Cabeçalho do Atleta (Com Foto de Perfil Clicável!) + Verificar Atualização + Logout
         item {
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -210,15 +455,35 @@ fun TelaPainelPrincipal(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { abrirModalPerfil() }
+                        ) {
                             Box(
                                 modifier = Modifier
-                                    .size(48.dp)
+                                    .size(54.dp)
                                     .clip(CircleShape)
-                                    .background(VerdeEsmeralda.copy(alpha = 0.2f)),
+                                    .background(VerdeEsmeralda.copy(alpha = 0.2f))
+                                    .border(2.dp, VerdeEsmeralda, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.Default.FitnessCenter, contentDescription = null, tint = VerdeEsmeralda)
+                                if (avatarBitmap != null) {
+                                    Image(
+                                        bitmap = avatarBitmap!!.asImageBitmap(),
+                                        contentDescription = "Foto de Perfil",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.AddAPhoto,
+                                        contentDescription = "Trocar Foto de Perfil",
+                                        tint = VerdeEsmeralda,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
@@ -242,9 +507,9 @@ fun TelaPainelPrincipal(
                                     }
                                 }
                                 Text(
-                                    text = "${perfil?.goal ?: "Hipertrofia"} • $xpTotal XP • v$versaoInstaladaNome (#$versaoInstaladaCodigo)",
+                                    text = "${perfil?.goal ?: "Hipertrofia"} • $xpTotal XP • Toque p/ editar foto/perfil",
                                     fontSize = 11.sp,
-                                    color = TextoSecundario
+                                    color = CianoNeon
                                 )
                             }
                         }

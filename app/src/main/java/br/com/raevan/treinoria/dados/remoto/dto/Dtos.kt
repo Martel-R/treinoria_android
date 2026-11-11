@@ -8,6 +8,7 @@ data class PerfilDto(
     val id: String = "",
     val name: String = "Atleta",
     val email: String? = null,
+    @SerialName("avatar_url") val avatarUrl: String? = null,
     val cpf: String? = null,
     @SerialName("birth_date") val birthDate: String? = null,
     val city: String? = null,
