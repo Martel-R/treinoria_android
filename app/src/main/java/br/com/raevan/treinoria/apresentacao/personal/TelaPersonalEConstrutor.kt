@@ -30,17 +30,19 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * Central de Avaliação de Desempenho & Evolução do Atleta + Acesso às Fichas de Treino
- * (e Carteira Multi-Alunos para Personal Trainers).
+ * Central de Avaliação de Desempenho & Evolução do Atleta +
+ * Acesso às Fichas de Treino +
+ * Ambiente da Academia (Serviços Contemplados na Matrícula ou Avulsos & Gestão de Planos).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TelaPersonalEConstrutor() {
     val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
-    // Inicialização Instantânea a partir do Cache em Memória (0ms!)
     var perfil by remember { mutableStateOf<PerfilDto?>(RepositorioTreinoria.cachePerfil) }
-    var abaSelecionada by remember { mutableStateOf(0) } // 0 = Desempenho & Evolução, 1 = Minhas Fichas, 2 = Carteira Personal
+    // 0 = Desempenho & Evolução, 1 = Minhas Fichas, 2 = Academia (Planos & Serviços), 3 = Carteira Alunos
+    var abaSelecionada by remember { mutableStateOf(0) }
     var alunos by remember {
         mutableStateOf<List<VinculoAlunoPersonalDto>>(RepositorioTreinoria.cacheAlunosPersonal)
     }
@@ -63,6 +65,38 @@ fun TelaPersonalEConstrutor() {
         mutableStateOf<List<MedidaCorporalDto>>(RepositorioTreinoria.cacheMedidas)
     }
 
+    // Estado de Serviços da Academia, Planos de Matrícula e Agendamentos
+    var servicosAcademia by remember {
+        mutableStateOf<List<ServicoAcademiaDto>>(RepositorioTreinoria.cacheServicosAcademia)
+    }
+    var planosAcademia by remember {
+        mutableStateOf<List<PlanoMatriculaAcademiaDto>>(RepositorioTreinoria.cachePlanosAcademia)
+    }
+    var agendamentosAcademia by remember {
+        mutableStateOf<List<AgendamentoServicoAcademiaDto>>(RepositorioTreinoria.cacheAgendamentosAcademia)
+    }
+    var servicoParaAgendar by remember { mutableStateOf<ServicoAcademiaDto?>(null) }
+    var agendarPelaMatricula by remember { mutableStateOf(true) }
+    var dataAgendamento by remember { mutableStateOf(RepositorioTreinoria.obterDataHojeIso()) }
+    var horaAgendamento by remember { mutableStateOf("18:00") }
+    var planoAlunoAgendamento by remember { mutableStateOf("Plano Gold Trimestral") }
+    var obsAgendamento by remember { mutableStateOf("") }
+    var salvandoAgendamento by remember { mutableStateOf(false) }
+
+    // Modal Criar Novo Serviço / Novo Plano (Gestor da Academia)
+    var exibirModalNovoServico by remember { mutableStateOf(false) }
+    var nomeNovoServico by remember { mutableStateOf("") }
+    var catNovoServico by remember { mutableStateOf("Avaliação & Saúde") }
+    var precoNovoServico by remember { mutableStateOf("80") }
+    var horarioNovoServico by remember { mutableStateOf("Seg a Sex • 08h às 20h") }
+    var descNovoServico by remember { mutableStateOf("") }
+
+    var exibirModalNovoPlanoAcademia by remember { mutableStateOf(false) }
+    var nomeNovoPlanoAcad by remember { mutableStateOf("") }
+    var cicloNovoPlanoAcad by remember { mutableStateOf("Mensal") }
+    var precoNovoPlanoAcad by remember { mutableStateOf("129.90") }
+    var beneficiosNovoPlanoAcad by remember { mutableStateOf("Musculação Livre, App TreinorIA PRO Incluso, Avaliação Física") }
+
     var avaliandoDesempenhoIa by remember { mutableStateOf(false) }
     var laudoDesempenhoIa by remember { mutableStateOf<String?>(null) }
 
@@ -74,7 +108,6 @@ fun TelaPersonalEConstrutor() {
         role == "trainer" || role == "gym" || role == "admin"
     }
 
-    // Modal Criar Nova Ficha (Com Gerador Inteligente por IA)
     var exibirModalNovaFicha by remember { mutableStateOf(false) }
     var alunoAlvoPrescricao by remember { mutableStateOf<VinculoAlunoPersonalDto?>(null) }
     var promptGeradorIaFicha by remember {
@@ -109,6 +142,9 @@ fun TelaPersonalEConstrutor() {
             estatisticasExercicios = RepositorioTreinoria.obterEstatisticasExercicios(forcarAtualizacao = forcar)
             mapaFadiga = RepositorioTreinoria.calcularMapaFadigaMuscular(forcarAtualizacao = forcar)
             medidas = RepositorioTreinoria.listarMedidasCorporais(forcarAtualizacao = forcar)
+            servicosAcademia = RepositorioTreinoria.listarServicosAcademia(forcarAtualizacao = forcar)
+            planosAcademia = RepositorioTreinoria.listarPlanosAcademia(forcarAtualizacao = forcar)
+            agendamentosAcademia = RepositorioTreinoria.listarAgendamentosServicosAcademia(forcarAtualizacao = forcar)
             if (catalogoExercicios.isEmpty()) {
                 catalogoExercicios = RepositorioTreinoria.listarExercicios(forcarAtualizacao = false)
             }
@@ -123,7 +159,6 @@ fun TelaPersonalEConstrutor() {
         recarregar(false)
     }
 
-    // Métricas Consolidadas de Desempenho & Evolução
     val volumeTotalHistorico = remember(sessoes) { sessoes.sumOf { it.totalVolumeKg }.toInt() }
     val mediaVolumePorTreino = remember(sessoes) {
         if (sessoes.isNotEmpty()) (volumeTotalHistorico / sessoes.size) else 0
@@ -142,6 +177,258 @@ fun TelaPersonalEConstrutor() {
                 Triple(ex?.name ?: "Exercício", st, umRmEstimado)
             }
             .sortedByDescending { it.second.maxWeightKg }
+    }
+
+    // Modal Marcar Serviço pela Matrícula ou Contratar Avulso
+    if (servicoParaAgendar != null) {
+        val srv = servicoParaAgendar!!
+        AlertDialog(
+            onDismissRequest = { if (!salvandoAgendamento) servicoParaAgendar = null },
+            title = {
+                Column {
+                    Text(
+                        text = if (agendarPelaMatricula) "✓ Marcar pela Matrícula (Incluso)" else "💳 Contratar Serviço Avulso",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (agendarPelaMatricula) VerdeEsmeralda else AmbarDestaque
+                    )
+                    Text(srv.name, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = agendarPelaMatricula,
+                            onClick = { agendarPelaMatricula = true },
+                            label = { Text("✓ Pela Matrícula (R$ 0)", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = !agendarPelaMatricula,
+                            onClick = { agendarPelaMatricula = false },
+                            label = { Text("💳 Avulso (R$ ${srv.priceBrl.toInt()})", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = planoAlunoAgendamento,
+                        onValueChange = { planoAlunoAgendamento = it },
+                        label = { Text("Seu Plano de Matrícula") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = dataAgendamento,
+                            onValueChange = { dataAgendamento = it },
+                            label = { Text("Data (AAAA-MM-DD)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = horaAgendamento,
+                            onValueChange = { horaAgendamento = it },
+                            label = { Text("Horário (HH:MM)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = obsAgendamento,
+                        onValueChange = { obsAgendamento = it },
+                        label = { Text("Observação (opcional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !salvandoAgendamento,
+                    onClick = {
+                        salvandoAgendamento = true
+                        escopo.launch {
+                            RepositorioTreinoria.registrarAgendamentoOuContratacaoServico(
+                                servico = srv,
+                                nomeAluno = perfil?.name ?: "Aluno",
+                                whatsappAluno = perfil?.whatsappPhone ?: "",
+                                planoMatriculaAluno = planoAlunoAgendamento,
+                                contempladoNaMatricula = agendarPelaMatricula,
+                                dataPreferida = dataAgendamento,
+                                horarioPreferido = horaAgendamento,
+                                observacoes = obsAgendamento
+                            )
+                            agendamentosAcademia = RepositorioTreinoria.cacheAgendamentosAcademia
+                            salvandoAgendamento = false
+                            servicoParaAgendar = null
+                            feedbackMensagem = if (agendarPelaMatricula) {
+                                "✅ '${srv.name}' marcado como contemplado na sua matrícula para $dataAgendamento às $horaAgendamento!"
+                            } else {
+                                "✅ Contratação de '${srv.name}' confirmada para $dataAgendamento às $horaAgendamento!"
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda)
+                ) {
+                    Text(
+                        if (salvandoAgendamento) "Confirmando..." else "Confirmar Marcação",
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { servicoParaAgendar = null }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    // Modal Novo Serviço da Academia
+    if (exibirModalNovoServico) {
+        AlertDialog(
+            onDismissRequest = { exibirModalNovoServico = false },
+            title = { Text("🛎️ Cadastrar Serviço da Academia", fontWeight = FontWeight.Black, fontSize = 17.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = nomeNovoServico,
+                        onValueChange = { nomeNovoServico = it },
+                        label = { Text("Nome do Serviço (ex: Bioimpedância, Pilates, Muay Thai)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = catNovoServico,
+                            onValueChange = { catNovoServico = it },
+                            label = { Text("Categoria") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = precoNovoServico,
+                            onValueChange = { precoNovoServico = it },
+                            label = { Text("Valor Avulso R$") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = horarioNovoServico,
+                        onValueChange = { horarioNovoServico = it },
+                        label = { Text("Horários (ex: Seg a Sex • 08h às 20h)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = descNovoServico,
+                        onValueChange = { descNovoServico = it },
+                        label = { Text("Descrição") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = nomeNovoServico.isNotBlank(),
+                    onClick = {
+                        escopo.launch {
+                            RepositorioTreinoria.criarServicoAcademia(
+                                nome = nomeNovoServico,
+                                categoria = catNovoServico,
+                                descricao = descNovoServico,
+                                precoBrl = precoNovoServico.replace(",", ".").toDoubleOrNull() ?: 80.0,
+                                duracaoMinutos = 40,
+                                horarioAtendimento = horarioNovoServico,
+                                planosContemplados = listOf("Plano Gold Trimestral", "Plano Black VIP Anual")
+                            )
+                            servicosAcademia = RepositorioTreinoria.cacheServicosAcademia
+                            nomeNovoServico = ""
+                            descNovoServico = ""
+                            exibirModalNovoServico = false
+                            feedbackMensagem = "✅ Novo serviço cadastrado no catálogo da academia!"
+                        }
+                    }
+                ) {
+                    Text("Salvar Serviço", fontWeight = FontWeight.Black)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { exibirModalNovoServico = false }) { Text("Cancelar") }
+            }
+        )
+    }
+
+    // Modal Novo Plano de Matrícula da Academia
+    if (exibirModalNovoPlanoAcademia) {
+        AlertDialog(
+            onDismissRequest = { exibirModalNovoPlanoAcademia = false },
+            title = { Text("🏷️ Novo Plano de Matrícula da Academia", fontWeight = FontWeight.Black, fontSize = 17.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = nomeNovoPlanoAcad,
+                        onValueChange = { nomeNovoPlanoAcad = it },
+                        label = { Text("Nome do Plano (ex: Plano Diamond Semestral)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = cicloNovoPlanoAcad,
+                            onValueChange = { cicloNovoPlanoAcad = it },
+                            label = { Text("Ciclo (Mensal/Anual)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = precoNovoPlanoAcad,
+                            onValueChange = { precoNovoPlanoAcad = it },
+                            label = { Text("Mensalidade R$") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = beneficiosNovoPlanoAcad,
+                        onValueChange = { beneficiosNovoPlanoAcad = it },
+                        label = { Text("Benefícios (separados por vírgula)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = nomeNovoPlanoAcad.isNotBlank(),
+                    onClick = {
+                        escopo.launch {
+                            RepositorioTreinoria.criarPlanoMatriculaAcademia(
+                                nome = nomeNovoPlanoAcad,
+                                ciclo = cicloNovoPlanoAcad,
+                                mensalidadeBrl = precoNovoPlanoAcad.replace(",", ".").toDoubleOrNull() ?: 129.90,
+                                beneficios = beneficiosNovoPlanoAcad.split(",").map { it.trim() }.filter { it.isNotBlank() },
+                                servicosContemplados = servicosAcademia.take(3).map { it.name }
+                            )
+                            planosAcademia = RepositorioTreinoria.cachePlanosAcademia
+                            nomeNovoPlanoAcad = ""
+                            exibirModalNovoPlanoAcademia = false
+                            feedbackMensagem = "✅ Novo Plano de Matrícula da Academia salvo!"
+                        }
+                    }
+                ) {
+                    Text("Salvar Plano", fontWeight = FontWeight.Black)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { exibirModalNovoPlanoAcademia = false }) { Text("Cancelar") }
+            }
+        )
     }
 
     if (exibirModalNovoAluno && ehPersonalOuAcademia) {
@@ -451,24 +738,24 @@ fun TelaPersonalEConstrutor() {
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
         // =====================================================================
-        // SELETOR SUPERIOR: [📊 Desempenho & Evolução] | [📋 Minhas Fichas] | ([👥 Alunos] se Personal)
+        // SELETOR SUPERIOR: [📊 Desempenho] | [📋 Fichas] | [🏢 Academia & Serviços] | ([👥 Alunos])
         // =====================================================================
         item {
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 FilterChip(
                     selected = abaSelecionada == 0,
                     onClick = { abaSelecionada = 0 },
                     label = {
                         Text(
-                            "📊 Desempenho & Evolução",
+                            "📊 Desempenho",
                             fontWeight = FontWeight.Black,
                             fontSize = 11.sp
                         )
-                    },
-                    modifier = Modifier.weight(1.25f)
+                    }
                 )
 
                 FilterChip(
@@ -480,22 +767,32 @@ fun TelaPersonalEConstrutor() {
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp
                         )
-                    },
-                    modifier = Modifier.weight(1f)
+                    }
+                )
+
+                FilterChip(
+                    selected = abaSelecionada == 2,
+                    onClick = { abaSelecionada = 2 },
+                    label = {
+                        Text(
+                            "🏢 Academia & Serviços (${servicosAcademia.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                    }
                 )
 
                 if (ehPersonalOuAcademia) {
                     FilterChip(
-                        selected = abaSelecionada == 2,
-                        onClick = { abaSelecionada = 2 },
+                        selected = abaSelecionada == 3,
+                        onClick = { abaSelecionada = 3 },
                         label = {
                             Text(
                                 "👥 Alunos (${alunos.size})",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp
                             )
-                        },
-                        modifier = Modifier.weight(0.95f)
+                        }
                     )
                 }
             }
@@ -523,7 +820,6 @@ fun TelaPersonalEConstrutor() {
         // ABA 0: AMBIENTE PRINCIPAL DE AVALIAÇÃO DE DESEMPENHO & EVOLUÇÃO DO USUÁRIO
         // =====================================================================
         if (abaSelecionada == 0) {
-            // Card de Acesso Rápido às Fichas + Botão de Avaliação de Desempenho com IA
             item {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
@@ -609,7 +905,6 @@ fun TelaPersonalEConstrutor() {
                 }
             }
 
-            // 4 KPIs de Performance Atlética
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -668,7 +963,6 @@ fun TelaPersonalEConstrutor() {
                 }
             }
 
-            // Gráfico de Barras de Evolução de Volume por Sessão (Últimos Treinos)
             if (sessoes.isNotEmpty()) {
                 item {
                     val ultimasSessoesCronologicas = sessoes.take(7).reversed()
@@ -736,7 +1030,6 @@ fun TelaPersonalEConstrutor() {
                 }
             }
 
-            // Ranking de Força Máxima, Recordes Pessoais (PRs) e 1RM Estimado (Fórmula de Epley)
             item {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
@@ -818,65 +1111,12 @@ fun TelaPersonalEConstrutor() {
                 }
             }
 
-            // Mapa Corporal 2D de Fadiga & Volume Semanal por Grupo Muscular
             item {
                 MapaCorporalFadigaCard(mapaStatus = mapaFadiga)
             }
-
-            // Evolução Antropométrica Recente (Peso, BF%, Medidas)
-            if (medidas.isNotEmpty()) {
-                item {
-                    val mAtual = medidas.first()
-                    val mAnterior = medidas.getOrNull(1)
-                    val diffPeso = if (mAtual.weightKg != null && mAnterior?.weightKg != null) {
-                        mAtual.weightKg - mAnterior.weightKg
-                    } else null
-
-                    Surface(
-                        shape = RoundedCornerShape(18.dp),
-                        color = SuperficieCard,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = "📏 Evolução Corporal & Antropometria",
-                                fontWeight = FontWeight.Black,
-                                fontSize = 14.sp,
-                                color = CianoNeon
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Peso Atual: ${mAtual.weightKg ?: "-"} kg" +
-                                        (if (diffPeso != null) " (${if (diffPeso >= 0) "+" else ""}${String.format("%.1f", diffPeso)} kg)" else ""),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = VerdeEsmeralda
-                                )
-                                Text(
-                                    text = "BF: ${mAtual.bodyFatPct ?: "-"}%",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = AmbarDestaque
-                                )
-                            }
-                            Text(
-                                text = "Peitoral: ${mAtual.chestCm ?: "-"}cm • Cintura: ${mAtual.waistCm ?: "-"}cm • Braço: ${mAtual.armsCm ?: "-"}cm • Coxa: ${mAtual.legsCm ?: "-"}cm",
-                                fontSize = 11.sp,
-                                color = TextoSecundario
-                            )
-                        }
-                    }
-                }
-            }
         } else if (abaSelecionada == 1) {
             // =================================================================
-            // ABA 1: MINHAS FICHAS DE TREINO (Criação Manual ou com Coach IA)
+            // ABA 1: MINHAS FICHAS DE TREINO
             // =================================================================
             item {
                 Button(
@@ -937,9 +1177,245 @@ fun TelaPersonalEConstrutor() {
                     }
                 }
             }
-        } else if (ehPersonalOuAcademia && abaSelecionada == 2) {
+        } else if (abaSelecionada == 2) {
             // =================================================================
-            // ABA 2: CARTEIRA MULTI-ALUNOS DO PERSONAL TRAINER
+            // ABA 2: AMBIENTE DA ACADEMIA (SERVIÇOS PRESTADOS & PLANOS DE MATRÍCULA)
+            // =================================================================
+            item {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = SuperficieCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "🏢 Serviços & Planos de Matrícula da Academia",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 16.sp,
+                            color = AmbarDestaque
+                        )
+                        Text(
+                            text = "Marque horários nos serviços já contemplados na sua matrícula ou contrate serviços avulsos diretamente pelo app!",
+                            fontSize = 11.sp,
+                            color = TextoSecundario
+                        )
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { exibirModalNovoServico = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Novo Serviço", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            }
+                            Button(
+                                onClick = { exibirModalNovoPlanoAcademia = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = AmbarDestaque),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Layers, contentDescription = null, tint = FundoAcademia, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Novo Plano", fontSize = 11.sp, fontWeight = FontWeight.Black, color = FundoAcademia)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Seção 1: Planos de Matrícula da Academia
+            item {
+                Text(
+                    text = "🏷️ Planos de Matrícula da Academia (${planosAcademia.size})",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 15.sp,
+                    color = CianoNeon
+                )
+            }
+
+            items(planosAcademia, key = { it.id }) { pl ->
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = SuperficieCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(pl.name, fontWeight = FontWeight.Black, fontSize = 15.sp, color = AmbarDestaque)
+                                Text("Ciclo: ${pl.billingCycle}", fontSize = 11.sp, color = TextoSecundario)
+                            }
+                            Text(
+                                text = "R$ ${String.format("%.2f", pl.priceBrl)}/mês",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 16.sp,
+                                color = VerdeEsmeralda
+                            )
+                        }
+                        pl.perks.forEach { pk ->
+                            Text("✓ $pk", fontSize = 11.sp, color = TextoPrimario)
+                        }
+                        if (pl.includedServiceNames.isNotEmpty()) {
+                            Text(
+                                text = "🛎️ Contempla na matrícula: ${pl.includedServiceNames.joinToString(", ")}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = VerdeEsmeraldaClaro
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Seção 2: Serviços Prestados pela Academia (Marcar pela Matrícula ou Contratar Avulso)
+            item {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "🛎️ Catálogo de Serviços da Academia (${servicosAcademia.size})",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 15.sp,
+                    color = VerdeEsmeralda
+                )
+            }
+
+            items(servicosAcademia, key = { it.id }) { srv ->
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = SuperficieCard,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = VerdeEsmeralda.copy(alpha = 0.16f)
+                            ) {
+                                Text(
+                                    text = srv.category.uppercase(),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = VerdeEsmeralda,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = "Avulso: R$ ${String.format("%.2f", srv.priceBrl)}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                color = AmbarDestaque
+                            )
+                        }
+
+                        Text(srv.name, fontWeight = FontWeight.Black, fontSize = 15.sp, color = TextoPrimario)
+                        if (!srv.description.isNullOrBlank()) {
+                            Text(srv.description, fontSize = 11.sp, color = TextoSecundario)
+                        }
+                        Text(
+                            text = "⏱️ ${srv.durationMinutes} min • 📅 ${srv.scheduleInfo ?: "Seg a Sex"}",
+                            fontSize = 11.sp,
+                            color = CianoNeon,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        if (srv.includedInPlans.isNotEmpty()) {
+                            Text(
+                                text = "✓ Incluso na matrícula: ${srv.includedInPlans.joinToString(", ")}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = VerdeEsmeraldaClaro
+                            )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    agendarPelaMatricula = true
+                                    servicoParaAgendar = srv
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("✓ Marcar p/ Matrícula", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    agendarPelaMatricula = false
+                                    servicoParaAgendar = srv
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "💳 Contratar (R$${srv.priceBrl.toInt()})",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AmbarDestaque
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Seção 3: Serviços Agendados / Contratados
+            if (agendamentosAcademia.isNotEmpty()) {
+                item {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "📅 Serviços Marcados / Contratados (${agendamentosAcademia.size})",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 15.sp,
+                        color = CianoNeon
+                    )
+                }
+
+                items(agendamentosAcademia, key = { it.id }) { ag ->
+                    val pelaMatricula = ag.bookingType == "included_in_plan"
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = SuperficieCard,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(ag.serviceName, fontWeight = FontWeight.Black, fontSize = 13.sp, color = TextoPrimario)
+                                Text(
+                                    text = if (pelaMatricula) "✓ Pela Matrícula" else "💳 R$ ${ag.priceChargedBrl.toInt()}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = if (pelaMatricula) VerdeEsmeralda else AmbarDestaque
+                                )
+                            }
+                            Text(
+                                text = "👤 ${ag.studentName} • 📅 ${ag.preferredDate ?: "Hoje"} às ${ag.preferredTime ?: "18:00"}",
+                                fontSize = 11.sp,
+                                color = CianoNeon
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (ehPersonalOuAcademia && abaSelecionada == 3) {
+            // =================================================================
+            // ABA 3: CARTEIRA MULTI-ALUNOS DO PERSONAL / ACADEMIA
             // =================================================================
             item {
                 Button(
@@ -948,29 +1424,9 @@ fun TelaPersonalEConstrutor() {
                     colors = ButtonDefaults.buttonColors(containerColor = CianoNeon),
                     modifier = Modifier.fillMaxWidth().height(50.dp)
                 ) {
-                    Icon(Icons.Default.PersonAdd, contentDescription = null)
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, tint = FundoAcademia)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Adicionar Novo Aluno & Enviar Link WhatsApp", fontWeight = FontWeight.Black)
-                }
-            }
-
-            if (alunos.isEmpty()) {
-                item {
-                    Surface(shape = RoundedCornerShape(16.dp), color = SuperficieCard, modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(Icons.Default.Groups, contentDescription = null, tint = CianoNeon, modifier = Modifier.size(38.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Sua Carteira de Alunos está pronta", fontWeight = FontWeight.Bold)
-                            Text(
-                                "Adicione seus alunos de consultoria presencial ou online para montar fichas personalizadas e enviar direto no WhatsApp.",
-                                fontSize = 12.sp,
-                                color = TextoSecundario
-                            )
-                        }
-                    }
+                    Text("Adicionar Novo Aluno & Enviar Link WhatsApp", fontWeight = FontWeight.Black, color = FundoAcademia)
                 }
             }
 

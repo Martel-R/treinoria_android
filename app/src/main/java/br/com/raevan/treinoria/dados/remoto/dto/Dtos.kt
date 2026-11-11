@@ -21,6 +21,7 @@ data class PerfilDto(
     @SerialName("subscription_plan") val subscriptionPlan: String = "trial_7d",
     @SerialName("trial_ends_at") val trialEndsAt: String? = null,
     @SerialName("assigned_trainer_id") val assignedTrainerId: String? = null,
+    @SerialName("assigned_gym_id") val assignedGymId: String? = null,
     @SerialName("weight_kg") val weightKg: Double? = null,
     @SerialName("height_cm") val heightCm: Double? = null,
     val goal: String = "Hipertrofia",
@@ -162,5 +163,53 @@ data class VinculoAlunoPersonalDto(
     @SerialName("student_whatsapp") val studentWhatsapp: String? = null,
     @SerialName("student_goal") val studentGoal: String = "Hipertrofia",
     val status: String = "active",
+    val notes: String? = null
+)
+
+@Serializable
+data class ServicoAcademiaDto(
+    val id: String = "",
+    @SerialName("gym_id") val gymId: String = "",
+    val name: String = "",
+    val category: String = "Avaliação & Saúde",
+    val description: String? = null,
+    @SerialName("price_brl") val priceBrl: Double = 0.0,
+    @SerialName("duration_minutes") val durationMinutes: Int = 30,
+    @SerialName("schedule_info") val scheduleInfo: String? = "Segunda a Sexta • 08h às 20h",
+    @SerialName("included_in_plans") val includedInPlans: List<String> = emptyList(),
+    @SerialName("is_active") val isActive: Boolean = true
+)
+
+@Serializable
+data class PlanoMatriculaAcademiaDto(
+    val id: String = "",
+    @SerialName("gym_id") val gymId: String = "",
+    val name: String = "",
+    @SerialName("billing_cycle") val billingCycle: String = "Mensal",
+    @SerialName("price_brl") val priceBrl: Double = 119.90,
+    @SerialName("enrollment_fee_brl") val enrollmentFeeBrl: Double = 0.0,
+    val description: String? = null,
+    val perks: List<String> = emptyList(),
+    @SerialName("included_service_names") val includedServiceNames: List<String> = emptyList(),
+    @SerialName("active_students_count") val activeStudentsCount: Int = 0,
+    @SerialName("is_highlighted") val isHighlighted: Boolean = false,
+    @SerialName("is_active") val isActive: Boolean = true
+)
+
+@Serializable
+data class AgendamentoServicoAcademiaDto(
+    val id: String = "",
+    @SerialName("gym_id") val gymId: String = "",
+    @SerialName("service_id") val serviceId: String = "",
+    @SerialName("service_name") val serviceName: String = "",
+    @SerialName("student_user_id") val studentUserId: String? = null,
+    @SerialName("student_name") val studentName: String = "",
+    @SerialName("student_whatsapp") val studentWhatsapp: String? = null,
+    @SerialName("student_plan_name") val studentPlanName: String? = "Plano Gold Trimestral",
+    @SerialName("booking_type") val bookingType: String = "included_in_plan",
+    @SerialName("price_charged_brl") val priceChargedBrl: Double = 0.0,
+    @SerialName("preferred_date") val preferredDate: String? = null,
+    @SerialName("preferred_time") val preferredTime: String? = null,
+    val status: String = "confirmed",
     val notes: String? = null
 )

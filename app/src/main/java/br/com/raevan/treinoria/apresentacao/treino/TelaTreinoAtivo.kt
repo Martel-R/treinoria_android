@@ -9,8 +9,10 @@ import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -120,8 +122,14 @@ fun TelaTreinoAtivo(
     var treinoEmAndamento by remember { mutableStateOf(true) }
 
     // =========================================================================
-    // CHECK-IN PRÉ-TREINO COM PERSONAL IA (Igual à Web — Abre Automaticamente!)
+    // CONTROLE DE EXPANSÃO / COMPRESSÃO DE SÉRIES POR EXERCÍCIO (Modo Foco!)
+    // Por padrão, abre apenas o 1º exercício (o que está sendo executado)
+    // e avança automaticamente para o próximo quando todas as séries dele terminam!
     // =========================================================================
+    var modoFocoApenasUmExpandido by remember { mutableStateOf(true) }
+    val exerciciosExpandidosIds = remember { mutableStateListOf<String>() }
+
+    // Check-in Pré-Treino com Personal IA
     var exibirCheckinPreTreinoModal by remember { mutableStateOf(true) }
     var jaMostrouBoasVindasCheckin by remember { mutableStateOf(false) }
     val mensagensChatPreTreino = remember { mutableStateListOf<MensagemChatIa>() }
@@ -134,9 +142,7 @@ fun TelaTreinoAtivo(
     var resumoIaAplicadoBanner by remember { mutableStateOf<String?>(null) }
     var prontidaoIaAplicada by remember { mutableStateOf<Int?>(null) }
 
-    // =========================================================================
-    // MODAL DE CONCLUSÃO DO TREINO (Idêntico ao `showFinishModal` da Web!)
-    // =========================================================================
+    // Modal de Conclusão do Treino
     var exibirModalConcluirTreino by remember { mutableStateOf(false) }
     var feelingEscolhido by remember { mutableStateOf("Ótimo") }
     var notasSessao by remember { mutableStateOf("") }
@@ -167,7 +173,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Demais Modais
     var exibirConfirmacaoDescartar by remember { mutableStateOf(false) }
     var exercicioIdParaTrocarEquivalente by remember { mutableStateOf<String?>(null) }
     var exibirAdicionarExercicioModal by remember { mutableStateOf(false) }
@@ -188,10 +193,8 @@ fun TelaTreinoAtivo(
     var presetCadencia by remember { mutableStateOf(CADENCE_PRESETS_ANDROID.first()) }
     var vozAtiva by remember { mutableStateOf(true) }
 
-    // Estado da Câmera Ao Vivo com IA + Áudio Bidirecional (`DialogoCameraAoVivoCoachIa`)
     var indiceSerieCameraAoVivoIa by remember { mutableStateOf<Int?>(null) }
 
-    // Estado da Tela Inteira Minimalista (com Controle de Mídia Integrado)
     var indiceSerieTelaInteira by remember { mutableStateOf<Int?>(null) }
     var faseTelaInteira by remember { mutableStateOf(FaseExecucaoTelaInteira.EXECUTANDO_REPETICOES) }
     var repAtualTelaInteira by remember { mutableStateOf(1) }
@@ -225,6 +228,34 @@ fun TelaTreinoAtivo(
             try {
                 tts?.speak(texto, TextToSpeech.QUEUE_FLUSH, null, "tts_${System.currentTimeMillis()}")
             } catch (_: Throwable) {}
+        }
+    }
+
+    // Função auxiliar: quando uma série é concluída, se todas as séries daquele exercício
+    // tiverem sido concluídas e o Modo Foco estiver ativo, comprime o exercício concluído
+    // e expande automaticamente o próximo exercício pendente!
+    val verificarAutoAvancoExercicio = { exIdConcluido: String ->
+        val todasDesteConcluidas = seriesEstado
+            .filter { it.exerciseId == exIdConcluido }
+            .all { it.completed }
+        if (todasDesteConcluidas && modoFocoApenasUmExpandido) {
+            val proximoPendenteId = seriesEstado.firstOrNull { !it.completed }?.exerciseId
+            exerciciosExpandidosIds.clear()
+            if (proximoPendenteId != null) {
+                exerciciosExpandidosIds.add(proximoPendenteId)
+            }
+        }
+    }
+
+    val alternarExpansaoExercicio = { exId: String ->
+        val jaExpandido = exerciciosExpandidosIds.contains(exId)
+        if (jaExpandido) {
+            exerciciosExpandidosIds.remove(exId)
+        } else {
+            if (modoFocoApenasUmExpandido) {
+                exerciciosExpandidosIds.clear()
+            }
+            exerciciosExpandidosIds.add(exId)
         }
     }
 
@@ -308,6 +339,9 @@ fun TelaTreinoAtivo(
                 )
             }
         }
+        // Expande automaticamente apenas o 1º exercício ao iniciar o treino!
+        exerciciosExpandidosIds.clear()
+        seriesEstado.firstOrNull()?.exerciseId?.let { exerciciosExpandidosIds.add(it) }
     }
 
     LaunchedEffect(treinoEmAndamento) {
@@ -356,9 +390,7 @@ fun TelaTreinoAtivo(
         listaPrs
     }
 
-    // =========================================================================
-    // MODAL DE CÂMERA AO VIVO COM IA + INTERAÇÃO POR ÁUDIO (Igual à Web!)
-    // =========================================================================
+    // Modal de Câmera Ao Vivo com IA + Interação por Áudio
     if (indiceSerieCameraAoVivoIa != null) {
         val idxCam = indiceSerieCameraAoVivoIa!!
         val serieCam = seriesEstado.getOrNull(idxCam)
@@ -385,11 +417,19 @@ fun TelaTreinoAtivo(
                             completed = true
                         )
                     }
+                    verificarAutoAvancoExercicio(serieCam.exerciseId)
                     exercicioDescansoBarra = serieCam.exerciseName
                     descansoBarraRapida = serieCam.restSeconds
                 },
                 aoAvancarParaProximaSerie = if (proxIdx != null) {
-                    { indiceSerieCameraAoVivoIa = proxIdx }
+                    {
+                        val proxExId = seriesEstado.getOrNull(proxIdx)?.exerciseId
+                        if (proxExId != null && modoFocoApenasUmExpandido) {
+                            exerciciosExpandidosIds.clear()
+                            exerciciosExpandidosIds.add(proxExId)
+                        }
+                        indiceSerieCameraAoVivoIa = proxIdx
+                    }
                 } else null,
                 proximaSerieDescricao = proxSerieObj?.let { "${it.exerciseName} • ${it.setNumber}ª Série (${it.weightKg}kg × ${it.reps}r)" },
                 aoFechar = { indiceSerieCameraAoVivoIa = null }
@@ -397,9 +437,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // =========================================================================
-    // MODAL DE CONCLUSÃO DO TREINO (Idêntico ao `showFinishModal` da Web!)
-    // =========================================================================
+    // Modal de Conclusão do Treino
     if (exibirModalConcluirTreino) {
         val duracaoMin = (segundosTreino / 60).coerceAtLeast(1)
         val qtdSeriesEfetivas = if (totalConcluidas > 0) totalConcluidas else seriesEstado.size
@@ -806,9 +844,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // =========================================================================
-    // MODAL DE CHECK-IN PRÉ-TREINO COM PERSONAL IA (IGUAL AO WEB APP!)
-    // =========================================================================
+    // Modal de Check-in Pré-Treino com Personal IA
     if (exibirCheckinPreTreinoModal) {
         Dialog(
             onDismissRequest = { exibirCheckinPreTreinoModal = false },
@@ -1115,6 +1151,8 @@ fun TelaTreinoAtivo(
                                                         )
                                                     }
                                                 }
+                                                exerciciosExpandidosIds.clear()
+                                                seriesEstado.firstOrNull()?.exerciseId?.let { exerciciosExpandidosIds.add(it) }
                                                 resumoIaAplicadoBanner = "✨ ${prop.workoutSummaryAdvice} (Prontidão ${prop.readinessScore}%)"
                                                 prontidaoIaAplicada = prop.readinessScore
                                                 exibirCheckinPreTreinoModal = false
@@ -1221,7 +1259,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Modal Trocar por Exercício Equivalente (mesmo grupo muscular)
+    // Modal Trocar por Exercício Equivalente
     if (exercicioIdParaTrocarEquivalente != null) {
         val serieOrigem = seriesEstado.firstOrNull { it.exerciseId == exercicioIdParaTrocarEquivalente }
         val grupoAlvo = serieOrigem?.muscleGroup ?: ""
@@ -1269,6 +1307,8 @@ fun TelaTreinoAtivo(
                                             )
                                         }
                                     }
+                                    exerciciosExpandidosIds.remove(exercicioIdParaTrocarEquivalente)
+                                    exerciciosExpandidosIds.add(eq.id)
                                     exercicioIdParaTrocarEquivalente = null
                                 }
                         ) {
@@ -1350,6 +1390,8 @@ fun TelaTreinoAtivo(
                                                 )
                                             )
                                         }
+                                        if (modoFocoApenasUmExpandido) exerciciosExpandidosIds.clear()
+                                        exerciciosExpandidosIds.add(ex.id)
                                         exibirAdicionarExercicioModal = false
                                     }
                             ) {
@@ -1376,7 +1418,7 @@ fun TelaTreinoAtivo(
         )
     }
 
-    // Modal Calculadora de Anilhas por Lado da Barra
+    // Modal Calculadora de Anilhas
     if (exibirCalculadoraAnilhas) {
         val total = pesoAlvoCalculadora.toDoubleOrNull() ?: 60.0
         val barra = pesoBarraCalculadora.toDoubleOrNull() ?: 20.0
@@ -1453,7 +1495,7 @@ fun TelaTreinoAtivo(
         )
     }
 
-    // Modal Seletor Rápido de CARGA (kg) com 1 Toque
+    // Modal Seletor Rápido de CARGA (kg)
     if (indiceSerieEditandoPeso != null) {
         val idx = indiceSerieEditandoPeso!!
         val serieAlvo = seriesEstado.getOrNull(idx)
@@ -1563,7 +1605,7 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Modal Seletor Rápido de REPETIÇÕES com 1 Toque
+    // Modal Seletor Rápido de REPETIÇÕES
     if (indiceSerieEditandoReps != null) {
         val idx = indiceSerieEditandoReps!!
         val serieAlvo = seriesEstado.getOrNull(idx)
@@ -1655,7 +1697,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Modal de confirmação para Descartar Treino em andamento
     if (exibirConfirmacaoDescartar) {
         AlertDialog(
             onDismissRequest = { exibirConfirmacaoDescartar = false },
@@ -1695,6 +1736,10 @@ fun TelaTreinoAtivo(
     val iniciarSerieEmTelaInteira = { idxSerie: Int ->
         val serie = seriesEstado.getOrNull(idxSerie)
         if (serie != null) {
+            if (modoFocoApenasUmExpandido) {
+                exerciciosExpandidosIds.clear()
+                exerciciosExpandidosIds.add(serie.exerciseId)
+            }
             val limiteReps = (serie.reps.toIntOrNull() ?: 10).coerceIn(1, 50)
             alvoRepsTelaInteira = limiteReps
             repAtualTelaInteira = 1
@@ -1745,6 +1790,7 @@ fun TelaTreinoAtivo(
             if (idx in seriesEstado.indices) {
                 seriesEstado[idx] = seriesEstado[idx].copy(completed = true)
             }
+            verificarAutoAvancoExercicio(serieAtual.exerciseId)
             GerenciadorNotificacoes.vibrarFimDescanso(contexto)
             falar("Série concluída! Descanso iniciado.")
             descansoTotalTelaInteira = serieAtual.restSeconds.coerceAtLeast(15)
@@ -1943,6 +1989,7 @@ fun TelaTreinoAtivo(
                                             if (idxAtual in seriesEstado.indices) {
                                                 seriesEstado[idxAtual] = seriesEstado[idxAtual].copy(completed = true)
                                             }
+                                            verificarAutoAvancoExercicio(serieAtual.exerciseId)
                                             descansoTotalTelaInteira = serieAtual.restSeconds.coerceAtLeast(15)
                                             descansoRestanteTelaInteira = descansoTotalTelaInteira
                                             faseTelaInteira = FaseExecucaoTelaInteira.EM_DESCANSO
@@ -2077,6 +2124,55 @@ fun TelaTreinoAtivo(
                         }
                     }
 
+                    // Barra de Controle de Expansão/Compressão das Séries (Modo Foco 1 Exercício vs Expandir Todos)
+                    HorizontalDivider(color = BordaCard.copy(alpha = 0.5f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = modoFocoApenasUmExpandido,
+                            onClick = {
+                                modoFocoApenasUmExpandido = !modoFocoApenasUmExpandido
+                                if (modoFocoApenasUmExpandido) {
+                                    val emExecucaoId = seriesEstado.firstOrNull { !it.completed }?.exerciseId
+                                        ?: seriesEstado.firstOrNull()?.exerciseId
+                                    exerciciosExpandidosIds.clear()
+                                    if (emExecucaoId != null) exerciciosExpandidosIds.add(emExecucaoId)
+                                }
+                            },
+                            label = {
+                                Text(
+                                    if (modoFocoApenasUmExpandido) "🎯 Foco: 1 Exercício por Vez" else "🎯 Foco (1 por vez)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+                        )
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(
+                                onClick = {
+                                    modoFocoApenasUmExpandido = false
+                                    exerciciosExpandidosIds.clear()
+                                    seriesAgrupadas.keys.forEach { exerciciosExpandidosIds.add(it.first) }
+                                },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) {
+                                Text("Expandir Todos", fontSize = 11.sp, color = CianoNeon, fontWeight = FontWeight.Bold)
+                            }
+                            TextButton(
+                                onClick = {
+                                    exerciciosExpandidosIds.clear()
+                                },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) {
+                                Text("Recolher Todos", fontSize = 11.sp, color = TextoSecundario, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
                     if (resumoIaAplicadoBanner != null) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
@@ -2090,39 +2186,6 @@ fun TelaTreinoAtivo(
                                 color = VerdeEsmeraldaClaro,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                             )
-                        }
-                    }
-
-                    if (!fichaAtual?.preWorkoutMeal.isNullOrBlank() || !fichaAtual?.postWorkoutMeal.isNullOrBlank()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (!fichaAtual?.preWorkoutMeal.isNullOrBlank()) {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = AmbarDestaque.copy(alpha = 0.12f),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = "🍌 Pré-Treino: ${fichaAtual?.preWorkoutMeal}",
-                                        fontSize = 11.sp,
-                                        color = TextoPrimario,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                    )
-                                }
-                            }
-                            if (!fichaAtual?.postWorkoutMeal.isNullOrBlank()) {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = VerdeEsmeralda.copy(alpha = 0.12f),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = "🥤 Pós-Treino: ${fichaAtual?.postWorkoutMeal}",
-                                        fontSize = 11.sp,
-                                        color = TextoPrimario,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                    )
-                                }
-                            }
                         }
                     }
 
@@ -2183,48 +2246,11 @@ fun TelaTreinoAtivo(
                             }
                         }
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Ritmo:", fontSize = 11.sp, color = TextoSecundario, fontWeight = FontWeight.Bold)
-                            CADENCE_PRESETS_ANDROID.forEach { preset ->
-                                FilterChip(
-                                    selected = presetCadencia.id == preset.id,
-                                    onClick = { presetCadencia = preset },
-                                    label = {
-                                        Text(
-                                            preset.id,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = { vozAtiva = !vozAtiva },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (vozAtiva) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                                contentDescription = "Voz",
-                                tint = if (vozAtiva) VerdeEsmeralda else TextoSecundario,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
                 }
             }
         }
 
-        // Lista de Exercícios e Séries (Agora com botão Câmera IA Live + Áudio em cada exercício e em cada série!)
+        // Lista de Exercícios (Comprimir e Expandir Séries ao tocar no cabeçalho!)
         seriesAgrupadas.forEach { (chave, seriesDoExercicio) ->
             val (exId, nomeExercicio) = chave
             val primeiro = seriesDoExercicio.firstOrNull()
@@ -2235,19 +2261,32 @@ fun TelaTreinoAtivo(
             val prMaximo = primeiro?.maxPrWeightKg
             val aiBadge = primeiro?.aiBadge
             val feitasCount = seriesDoExercicio.count { it.completed }
+            val todasConcluidas = feitasCount == seriesDoExercicio.size && seriesDoExercicio.isNotEmpty()
+            val estaExpandido = exerciciosExpandidosIds.contains(exId)
             val videoAbertoNesteCard = exercicioComVideoAbertoId == exId
 
             item(key = exId) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = SuperficieCard,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (estaExpandido) {
+                                Modifier.border(1.5.dp, VerdeEsmeralda.copy(alpha = 0.7f), RoundedCornerShape(18.dp))
+                            } else {
+                                Modifier
+                            }
+                        )
                 ) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // CABEÇALHO CLICÁVEL DO EXERCÍCIO (Toque para Expandir ou Comprimir as Séries!)
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { alternarExpansaoExercicio(exId) },
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Top
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(
@@ -2297,7 +2336,7 @@ fun TelaTreinoAtivo(
                                     text = nomeExercicio,
                                     fontWeight = FontWeight.Black,
                                     fontSize = 16.sp,
-                                    color = TextoPrimario
+                                    color = if (todasConcluidas) VerdeEsmeraldaClaro else TextoPrimario
                                 )
 
                                 if (!aiBadge.isNullOrBlank()) {
@@ -2310,608 +2349,627 @@ fun TelaTreinoAtivo(
                                 }
 
                                 Text(
-                                    text = "Meta: ${seriesDoExercicio.size} séries × ${primeiro?.targetRepsRange ?: "8-12"} reps • Descanso: ${primeiro?.restSeconds ?: 90}s",
+                                    text = if (estaExpandido)
+                                        "Meta: ${seriesDoExercicio.size} séries × ${primeiro?.targetRepsRange ?: "8-12"} reps • Toque p/ recolher ▲"
+                                    else
+                                        "Séries recolhidas (${primeiro?.weightKg ?: "20"}kg × ${primeiro?.reps ?: "10"}r) • Toque p/ expandir ▼",
                                     fontSize = 11.sp,
-                                    color = VerdeEsmeraldaClaro
+                                    color = if (estaExpandido) VerdeEsmeraldaClaro else CianoNeon
                                 )
                             }
 
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (feitasCount == seriesDoExercicio.size) VerdeEsmeralda.copy(alpha = 0.2f) else SuperficieElevada
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text(
-                                    text = "$feitasCount/${seriesDoExercicio.size}",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = if (feitasCount == seriesDoExercicio.size) VerdeEsmeralda else TextoPrimario,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                )
-                            }
-                        }
-
-                        // Barra de Ações do Exercício: [📹 Câmera IA Live] [🎬 Vídeo] [🔄 Trocar] [🧮 Anilhas]
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = CianoNeon.copy(alpha = 0.18f),
-                                modifier = Modifier
-                                    .weight(1.25f)
-                                    .clickable {
-                                        val serieNaoConcluida = seriesDoExercicio.firstOrNull { !it.completed } ?: seriesDoExercicio.firstOrNull()
-                                        if (serieNaoConcluida != null) {
-                                            val idxAlvo = seriesEstado.indexOf(serieNaoConcluida)
-                                            if (idxAlvo >= 0) indiceSerieCameraAoVivoIa = idxAlvo
-                                        }
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Videocam,
-                                        contentDescription = "Câmera IA Live",
-                                        tint = CianoNeon,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = "Câmera IA",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = CianoNeon,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-
-                            if (!videoUrl.isNullOrBlank()) {
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
-                                    color = VerdeEsmeralda.copy(alpha = 0.14f),
-                                    modifier = Modifier
-                                        .weight(0.95f)
-                                        .clickable {
-                                            exercicioComVideoAbertoId = if (videoAbertoNesteCard) null else exId
-                                        }
+                                    color = if (todasConcluidas) VerdeEsmeralda.copy(alpha = 0.22f) else SuperficieElevada
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = if (videoAbertoNesteCard) Icons.Default.Close else Icons.Default.PlayCircle,
-                                            contentDescription = null,
-                                            tint = VerdeEsmeralda,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(3.dp))
-                                        Text(
-                                            text = if (videoAbertoNesteCard) "Fechar" else "Vídeo",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = VerdeEsmeralda,
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = AmbarDestaque.copy(alpha = 0.14f),
-                                modifier = Modifier
-                                    .weight(1.05f)
-                                    .clickable {
-                                        exercicioIdParaTrocarEquivalente = exId
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SwapHoriz,
-                                        contentDescription = null,
-                                        tint = AmbarDestaque,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
                                     Text(
-                                        text = "Trocar",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = AmbarDestaque,
-                                        maxLines = 1
+                                        text = if (todasConcluidas) "✓ $feitasCount/${seriesDoExercicio.size}" else "$feitasCount/${seriesDoExercicio.size}",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = if (todasConcluidas) VerdeEsmeralda else TextoPrimario,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                     )
                                 }
-                            }
 
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = SuperficieElevada,
-                                modifier = Modifier
-                                    .weight(0.95f)
-                                    .clickable {
-                                        pesoAlvoCalculadora = primeiro?.weightKg ?: "60"
-                                        nomeExercicioCalculadora = nomeExercicio
-                                        exibirCalculadoraAnilhas = true
-                                    }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Calculate,
-                                        contentDescription = null,
-                                        tint = TextoPrimario,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = "Anilhas",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextoPrimario,
-                                        maxLines = 1
-                                    )
-                                }
+                                Icon(
+                                    imageVector = if (estaExpandido) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = if (estaExpandido) "Comprimir séries" else "Expandir séries",
+                                    tint = if (estaExpandido) VerdeEsmeralda else TextoSecundario,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
                         }
 
-                        if (videoAbertoNesteCard && !videoUrl.isNullOrBlank()) {
-                            PlayerVideoNativoCard(
-                                tituloExercicio = nomeExercicio,
-                                grupoMuscular = grupoMuscular,
-                                videoUrl = videoUrl,
-                                instrucoes = instrucoes,
-                                aoFechar = { exercicioComVideoAbertoId = null }
-                            )
-                        }
-
-                        seriesDoExercicio.forEach { serie ->
-                            val idxGlobal = seriesEstado.indexOf(serie)
-                            Surface(
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (serie.completed) VerdeEsmeralda.copy(alpha = 0.10f) else SuperficieElevada.copy(alpha = 0.65f),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        // CONTEÚDO EXPANSÍVEL DO EXERCÍCIO (Botões de Ação + Lista de Séries)
+                        AnimatedVisibility(visible = estaExpandido) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                // Barra de Ações do Exercício: [📹 Câmera IA] [🎬 Vídeo] [🔄 Trocar] [🧮 Anilhas]
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Surface(
-                                                shape = RoundedCornerShape(8.dp),
-                                                color = when {
-                                                    serie.isWarmup -> AmbarDestaque.copy(alpha = 0.22f)
-                                                    serie.completed -> VerdeEsmeralda
-                                                    else -> FundoAcademia
-                                                },
-                                                modifier = Modifier
-                                                    .size(32.dp)
-                                                    .clickable {
-                                                        if (idxGlobal >= 0) {
-                                                            seriesEstado[idxGlobal] = serie.copy(isWarmup = !serie.isWarmup)
-                                                        }
-                                                    }
-                                            ) {
-                                                Box(contentAlignment = Alignment.Center) {
-                                                    Text(
-                                                        text = if (serie.isWarmup) "W" else "${serie.setNumber}ª",
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 12.sp,
-                                                        color = when {
-                                                            serie.isWarmup -> AmbarDestaque
-                                                            serie.completed -> FundoAcademia
-                                                            else -> TextoPrimario
-                                                        },
-                                                        maxLines = 1
-                                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = CianoNeon.copy(alpha = 0.18f),
+                                        modifier = Modifier
+                                            .weight(1.25f)
+                                            .clickable {
+                                                val serieNaoConcluida = seriesDoExercicio.firstOrNull { !it.completed } ?: seriesDoExercicio.firstOrNull()
+                                                if (serieNaoConcluida != null) {
+                                                    val idxAlvo = seriesEstado.indexOf(serieNaoConcluida)
+                                                    if (idxAlvo >= 0) indiceSerieCameraAoVivoIa = idxAlvo
                                                 }
                                             }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Videocam,
+                                                contentDescription = "Câmera IA Live",
+                                                tint = CianoNeon,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "Câmera IA",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = CianoNeon,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
 
-                                            Column {
-                                                Text(
-                                                    text = "ANTERIOR",
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = TextoSecundario
+                                    if (!videoUrl.isNullOrBlank()) {
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = VerdeEsmeralda.copy(alpha = 0.14f),
+                                            modifier = Modifier
+                                                .weight(0.95f)
+                                                .clickable {
+                                                    exercicioComVideoAbertoId = if (videoAbertoNesteCard) null else exId
+                                                }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                                horizontalArrangement = Arrangement.Center,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (videoAbertoNesteCard) Icons.Default.Close else Icons.Default.PlayCircle,
+                                                    contentDescription = null,
+                                                    tint = VerdeEsmeralda,
+                                                    modifier = Modifier.size(15.dp)
                                                 )
+                                                Spacer(modifier = Modifier.width(3.dp))
                                                 Text(
-                                                    text = if (serie.prevWeightKg != null && serie.prevWeightKg > 0)
-                                                        "${formatarPeso(serie.prevWeightKg)}kg × ${serie.prevReps ?: 10}"
-                                                    else
-                                                        "Sem hist.",
+                                                    text = if (videoAbertoNesteCard) "Fechar" else "Vídeo",
                                                     fontSize = 11.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = TextoPrimario,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = VerdeEsmeralda,
                                                     maxLines = 1
                                                 )
                                             }
                                         }
+                                    }
 
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = AmbarDestaque.copy(alpha = 0.14f),
+                                        modifier = Modifier
+                                            .weight(1.05f)
+                                            .clickable {
+                                                exercicioIdParaTrocarEquivalente = exId
+                                            }
+                                    ) {
                                         Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            // Botão Câmera IA Ao Vivo + Voz por Série
-                                            Surface(
-                                                shape = RoundedCornerShape(10.dp),
-                                                color = CianoNeon.copy(alpha = 0.18f),
-                                                modifier = Modifier
-                                                    .height(34.dp)
-                                                    .clickable {
-                                                        if (idxGlobal >= 0) {
-                                                            indiceSerieCameraAoVivoIa = idxGlobal
-                                                        }
-                                                    }
+                                            Icon(
+                                                imageVector = Icons.Default.SwapHoriz,
+                                                contentDescription = null,
+                                                tint = AmbarDestaque,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "Trocar",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AmbarDestaque,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = SuperficieElevada,
+                                        modifier = Modifier
+                                            .weight(0.95f)
+                                            .clickable {
+                                                pesoAlvoCalculadora = primeiro?.weightKg ?: "60"
+                                                nomeExercicioCalculadora = nomeExercicio
+                                                exibirCalculadoraAnilhas = true
+                                            }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Calculate,
+                                                contentDescription = null,
+                                                tint = TextoPrimario,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "Anilhas",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextoPrimario,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (videoAbertoNesteCard && !videoUrl.isNullOrBlank()) {
+                                    PlayerVideoNativoCard(
+                                        tituloExercicio = nomeExercicio,
+                                        grupoMuscular = grupoMuscular,
+                                        videoUrl = videoUrl,
+                                        instrucoes = instrucoes,
+                                        aoFechar = { exercicioComVideoAbertoId = null }
+                                    )
+                                }
+
+                                seriesDoExercicio.forEach { serie ->
+                                    val idxGlobal = seriesEstado.indexOf(serie)
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = if (serie.completed) VerdeEsmeralda.copy(alpha = 0.10f) else SuperficieElevada.copy(alpha = 0.65f),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(10.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Row(
-                                                    modifier = Modifier.padding(horizontal = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                 ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Videocam,
-                                                        contentDescription = "Câmera IA Live",
-                                                        tint = CianoNeon,
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(3.dp))
-                                                    Text(
-                                                        text = "Live IA",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Black,
-                                                        color = CianoNeon,
-                                                        maxLines = 1
-                                                    )
-                                                }
-                                            }
-
-                                            // Botão Guiar Contagem Tela Cheia
-                                            Surface(
-                                                shape = RoundedCornerShape(10.dp),
-                                                color = RoxoDestaque.copy(alpha = 0.18f),
-                                                modifier = Modifier
-                                                    .height(34.dp)
-                                                    .clickable {
-                                                        if (idxGlobal >= 0) {
-                                                            iniciarSerieEmTelaInteira(idxGlobal)
-                                                        }
-                                                    }
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.PlayArrow,
-                                                        contentDescription = "Iniciar Contagem Tela Cheia",
-                                                        tint = RoxoDestaque,
-                                                        modifier = Modifier.size(15.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(2.dp))
-                                                    Text(
-                                                        text = "${serie.reps}r",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Black,
-                                                        color = RoxoDestaque,
-                                                        maxLines = 1
-                                                    )
-                                                }
-                                            }
-
-                                            if (seriesDoExercicio.size > 1) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    color = FundoAcademia,
-                                                    modifier = Modifier
-                                                        .size(34.dp)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                seriesEstado.removeAt(idxGlobal)
-                                                                var num = 1
-                                                                seriesEstado.indices.forEach { i ->
-                                                                    if (seriesEstado[i].exerciseId == exId) {
-                                                                        seriesEstado[i] = seriesEstado[i].copy(setNumber = num++)
-                                                                    }
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = when {
+                                                            serie.isWarmup -> AmbarDestaque.copy(alpha = 0.22f)
+                                                            serie.completed -> VerdeEsmeralda
+                                                            else -> FundoAcademia
+                                                        },
+                                                        modifier = Modifier
+                                                            .size(32.dp)
+                                                            .clickable {
+                                                                if (idxGlobal >= 0) {
+                                                                    seriesEstado[idxGlobal] = serie.copy(isWarmup = !serie.isWarmup)
                                                                 }
                                                             }
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Text(
+                                                                text = if (serie.isWarmup) "W" else "${serie.setNumber}ª",
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 12.sp,
+                                                                color = when {
+                                                                    serie.isWarmup -> AmbarDestaque
+                                                                    serie.completed -> FundoAcademia
+                                                                    else -> TextoPrimario
+                                                                },
+                                                                maxLines = 1
+                                                            )
                                                         }
-                                                ) {
-                                                    Box(contentAlignment = Alignment.Center) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.Close,
-                                                            contentDescription = "Remover série",
-                                                            tint = TextoSecundario,
-                                                            modifier = Modifier.size(15.dp)
+                                                    }
+
+                                                    Column {
+                                                        Text(
+                                                            text = "ANTERIOR",
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = TextoSecundario
+                                                        )
+                                                        Text(
+                                                            text = if (serie.prevWeightKg != null && serie.prevWeightKg > 0)
+                                                                "${formatarPeso(serie.prevWeightKg)}kg × ${serie.prevReps ?: 10}"
+                                                            else
+                                                                "Sem hist.",
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = TextoPrimario,
+                                                            maxLines = 1
                                                         )
                                                     }
                                                 }
-                                            }
 
-                                            Surface(
-                                                shape = RoundedCornerShape(10.dp),
-                                                color = if (serie.completed) VerdeEsmeralda else FundoAcademia,
-                                                modifier = Modifier
-                                                    .height(34.dp)
-                                                    .clickable {
-                                                        if (idxGlobal >= 0) {
-                                                            val novoStatus = !serie.completed
-                                                            seriesEstado[idxGlobal] = serie.copy(completed = novoStatus)
-                                                            if (novoStatus) {
-                                                                exercicioDescansoBarra = serie.exerciseName
-                                                                descansoBarraRapida = serie.restSeconds
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                ) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = CianoNeon.copy(alpha = 0.18f),
+                                                        modifier = Modifier
+                                                            .height(34.dp)
+                                                            .clickable {
+                                                                if (idxGlobal >= 0) {
+                                                                    indiceSerieCameraAoVivoIa = idxGlobal
+                                                                }
+                                                            }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 8.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Videocam,
+                                                                contentDescription = "Câmera IA Live",
+                                                                tint = CianoNeon,
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(3.dp))
+                                                            Text(
+                                                                text = "Live IA",
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Black,
+                                                                color = CianoNeon,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Surface(
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = RoxoDestaque.copy(alpha = 0.18f),
+                                                        modifier = Modifier
+                                                            .height(34.dp)
+                                                            .clickable {
+                                                                if (idxGlobal >= 0) {
+                                                                    iniciarSerieEmTelaInteira(idxGlobal)
+                                                                }
+                                                            }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 8.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.PlayArrow,
+                                                                contentDescription = "Iniciar Contagem Tela Cheia",
+                                                                tint = RoxoDestaque,
+                                                                modifier = Modifier.size(15.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(2.dp))
+                                                            Text(
+                                                                text = "${serie.reps}r",
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Black,
+                                                                color = RoxoDestaque,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                    }
+
+                                                    if (seriesDoExercicio.size > 1) {
+                                                        Surface(
+                                                            shape = RoundedCornerShape(10.dp),
+                                                            color = FundoAcademia,
+                                                            modifier = Modifier
+                                                                .size(34.dp)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        seriesEstado.removeAt(idxGlobal)
+                                                                        var num = 1
+                                                                        seriesEstado.indices.forEach { i ->
+                                                                            if (seriesEstado[i].exerciseId == exId) {
+                                                                                seriesEstado[i] = seriesEstado[i].copy(setNumber = num++)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                        ) {
+                                                            Box(contentAlignment = Alignment.Center) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Close,
+                                                                    contentDescription = "Remover série",
+                                                                    tint = TextoSecundario,
+                                                                    modifier = Modifier.size(15.dp)
+                                                                )
                                                             }
                                                         }
                                                     }
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 10.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Check,
-                                                        contentDescription = null,
-                                                        tint = if (serie.completed) FundoAcademia else TextoPrimario,
-                                                        modifier = Modifier.size(15.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(3.dp))
-                                                    Text(
-                                                        text = if (serie.completed) "Feito" else "OK",
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Black,
-                                                        color = if (serie.completed) FundoAcademia else TextoPrimario,
-                                                        maxLines = 1
-                                                    )
+
+                                                    Surface(
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = if (serie.completed) VerdeEsmeralda else FundoAcademia,
+                                                        modifier = Modifier
+                                                            .height(34.dp)
+                                                            .clickable {
+                                                                if (idxGlobal >= 0) {
+                                                                    val novoStatus = !serie.completed
+                                                                    seriesEstado[idxGlobal] = serie.copy(completed = novoStatus)
+                                                                    if (novoStatus) {
+                                                                        verificarAutoAvancoExercicio(serie.exerciseId)
+                                                                        exercicioDescansoBarra = serie.exerciseName
+                                                                        descansoBarraRapida = serie.restSeconds
+                                                                    }
+                                                                }
+                                                            }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 10.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = if (serie.completed) FundoAcademia else TextoPrimario,
+                                                                modifier = Modifier.size(15.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(3.dp))
+                                                            Text(
+                                                                text = if (serie.completed) "Feito" else "OK",
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Black,
+                                                                color = if (serie.completed) FundoAcademia else TextoPrimario,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
-                                        }
-                                    }
 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = FundoAcademia,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
                                             Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(4.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(34.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .background(SuperficieCard)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                val atual = serie.weightKg.toDoubleOrNull() ?: 20.0
-                                                                val novo = (atual - 2.5).coerceAtLeast(0.0)
-                                                                seriesEstado[idxGlobal] = serie.copy(weightKg = formatarPeso(novo))
-                                                            }
-                                                        },
-                                                    contentAlignment = Alignment.Center
+                                                Surface(
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = FundoAcademia,
+                                                    modifier = Modifier.weight(1f)
                                                 ) {
-                                                    Text(
-                                                        text = "−",
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 18.sp,
-                                                        color = TextoPrimario,
-                                                        maxLines = 1
-                                                    )
-                                                }
-
-                                                Column(
-                                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                valorManualModal = ""
-                                                                indiceSerieEditandoPeso = idxGlobal
-                                                            }
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(34.dp)
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .background(SuperficieCard)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        val atual = serie.weightKg.toDoubleOrNull() ?: 20.0
+                                                                        val novo = (atual - 2.5).coerceAtLeast(0.0)
+                                                                        seriesEstado[idxGlobal] = serie.copy(weightKg = formatarPeso(novo))
+                                                                    }
+                                                                },
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = "−",
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 18.sp,
+                                                                color = TextoPrimario,
+                                                                maxLines = 1
+                                                            )
                                                         }
-                                                ) {
-                                                    Text(
-                                                        text = serie.weightKg,
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 16.sp,
-                                                        color = TextoPrimario,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Clip
-                                                    )
-                                                    Text(
-                                                        text = "KG",
-                                                        fontSize = 9.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = VerdeEsmeralda,
-                                                        maxLines = 1
-                                                    )
-                                                }
 
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(34.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .background(SuperficieCard)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                val atual = serie.weightKg.toDoubleOrNull() ?: 20.0
-                                                                val novo = atual + 2.5
-                                                                seriesEstado[idxGlobal] = serie.copy(weightKg = formatarPeso(novo))
-                                                            }
-                                                        },
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Text(
-                                                        text = "+",
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 18.sp,
-                                                        color = VerdeEsmeralda,
-                                                        maxLines = 1
-                                                    )
-                                                }
-                                            }
-                                        }
-
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = FundoAcademia,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(4.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(34.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .background(SuperficieCard)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                val atual = serie.reps.toIntOrNull() ?: 10
-                                                                val novo = (atual - 1).coerceAtLeast(1)
-                                                                seriesEstado[idxGlobal] = serie.copy(reps = novo.toString())
-                                                            }
-                                                        },
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    Text(
-                                                        text = "−",
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 18.sp,
-                                                        color = TextoPrimario,
-                                                        maxLines = 1
-                                                    )
-                                                }
-
-                                                Column(
-                                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                indiceSerieEditandoReps = idxGlobal
-                                                            }
+                                                        Column(
+                                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        valorManualModal = ""
+                                                                        indiceSerieEditandoPeso = idxGlobal
+                                                                    }
+                                                                }
+                                                        ) {
+                                                            Text(
+                                                                text = serie.weightKg,
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 16.sp,
+                                                                color = TextoPrimario,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Clip
+                                                            )
+                                                            Text(
+                                                                text = "KG",
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = VerdeEsmeralda,
+                                                                maxLines = 1
+                                                            )
                                                         }
-                                                ) {
-                                                    Text(
-                                                        text = serie.reps,
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 16.sp,
-                                                        color = TextoPrimario,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Clip
-                                                    )
-                                                    Text(
-                                                        text = "REPS",
-                                                        fontSize = 9.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = CianoNeon,
-                                                        maxLines = 1
-                                                    )
+
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(34.dp)
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .background(SuperficieCard)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        val atual = serie.weightKg.toDoubleOrNull() ?: 20.0
+                                                                        val novo = atual + 2.5
+                                                                        seriesEstado[idxGlobal] = serie.copy(weightKg = formatarPeso(novo))
+                                                                    }
+                                                                },
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = "+",
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 18.sp,
+                                                                color = VerdeEsmeralda,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                    }
                                                 }
 
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(34.dp)
-                                                        .clip(RoundedCornerShape(8.dp))
-                                                        .background(SuperficieCard)
-                                                        .clickable {
-                                                            if (idxGlobal >= 0) {
-                                                                val atual = serie.reps.toIntOrNull() ?: 10
-                                                                val novo = atual + 1
-                                                                seriesEstado[idxGlobal] = serie.copy(reps = novo.toString())
-                                                            }
-                                                        },
-                                                    contentAlignment = Alignment.Center
+                                                Surface(
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    color = FundoAcademia,
+                                                    modifier = Modifier.weight(1f)
                                                 ) {
-                                                    Text(
-                                                        text = "+",
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 18.sp,
-                                                        color = VerdeEsmeralda,
-                                                        maxLines = 1
-                                                    )
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(34.dp)
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .background(SuperficieCard)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        val atual = serie.reps.toIntOrNull() ?: 10
+                                                                        val novo = (atual - 1).coerceAtLeast(1)
+                                                                        seriesEstado[idxGlobal] = serie.copy(reps = novo.toString())
+                                                                    }
+                                                                },
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = "−",
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 18.sp,
+                                                                color = TextoPrimario,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+
+                                                        Column(
+                                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        indiceSerieEditandoReps = idxGlobal
+                                                                    }
+                                                                }
+                                                        ) {
+                                                            Text(
+                                                                text = serie.reps,
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 16.sp,
+                                                                color = TextoPrimario,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Clip
+                                                            )
+                                                            Text(
+                                                                text = "REPS",
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = CianoNeon,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(34.dp)
+                                                                .clip(RoundedCornerShape(8.dp))
+                                                                .background(SuperficieCard)
+                                                                .clickable {
+                                                                    if (idxGlobal >= 0) {
+                                                                        val atual = serie.reps.toIntOrNull() ?: 10
+                                                                        val novo = atual + 1
+                                                                        seriesEstado[idxGlobal] = serie.copy(reps = novo.toString())
+                                                                    }
+                                                                },
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(
+                                                                text = "+",
+                                                                fontWeight = FontWeight.Black,
+                                                                fontSize = 18.sp,
+                                                                color = VerdeEsmeralda,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = VerdeEsmeralda.copy(alpha = 0.14f),
-                                modifier = Modifier.clickable {
-                                    val ultima = seriesDoExercicio.lastOrNull()
-                                    if (ultima != null) {
-                                        val posInserir = seriesEstado.indexOfLast { it.exerciseId == exId } + 1
-                                        seriesEstado.add(
-                                            posInserir,
-                                            ultima.copy(
-                                                setNumber = seriesDoExercicio.size + 1,
-                                                completed = false
-                                            )
-                                        )
-                                    }
-                                }
-                            ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.Add, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(15.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("+ Série", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = VerdeEsmeralda)
-                                }
-                            }
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = VerdeEsmeralda.copy(alpha = 0.14f),
+                                        modifier = Modifier.clickable {
+                                            val ultima = seriesDoExercicio.lastOrNull()
+                                            if (ultima != null) {
+                                                val posInserir = seriesEstado.indexOfLast { it.exerciseId == exId } + 1
+                                                seriesEstado.add(
+                                                    posInserir,
+                                                    ultima.copy(
+                                                        setNumber = seriesDoExercicio.size + 1,
+                                                        completed = false
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = null, tint = VerdeEsmeralda, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("+ Série", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = VerdeEsmeralda)
+                                        }
+                                    }
 
-                            TextButton(
-                                onClick = {
-                                    seriesEstado.removeAll { it.exerciseId == exId }
+                                    TextButton(
+                                        onClick = {
+                                            seriesEstado.removeAll { it.exerciseId == exId }
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = TextoSecundario, modifier = Modifier.size(15.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Remover exercício", fontSize = 11.sp, color = TextoSecundario)
+                                    }
                                 }
-                            ) {
-                                Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = TextoSecundario, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Remover exercício", fontSize = 11.sp, color = TextoSecundario)
                             }
                         }
                     }

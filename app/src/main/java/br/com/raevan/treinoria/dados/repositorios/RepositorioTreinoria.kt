@@ -15,6 +15,8 @@ import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.storage.storage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.json.JSONArray
@@ -124,6 +126,11 @@ object RepositorioTreinoria {
     @Volatile var cacheBitmapsPorUrl: MutableMap<String, Bitmap> = mutableMapOf()
     @Volatile var cacheAlunosPersonal: List<VinculoAlunoPersonalDto> = emptyList()
 
+    // Cache de Serviços da Academia, Planos de Matrícula e Agendamentos
+    @Volatile var cacheServicosAcademia: List<ServicoAcademiaDto> = emptyList()
+    @Volatile var cachePlanosAcademia: List<PlanoMatriculaAcademiaDto> = emptyList()
+    @Volatile var cacheAgendamentosAcademia: List<AgendamentoServicoAcademiaDto> = emptyList()
+
     fun limparTodoCache() {
         cacheUserId = null
         cacheDataDiaIso = null
@@ -142,6 +149,9 @@ object RepositorioTreinoria {
         cacheFotosProgresso = emptyList()
         cacheBitmapsPorUrl.clear()
         cacheAlunosPersonal = emptyList()
+        cacheServicosAcademia = emptyList()
+        cachePlanosAcademia = emptyList()
+        cacheAgendamentosAcademia = emptyList()
     }
 
     private fun validarSessaoECacheDoDia() {
@@ -173,6 +183,13 @@ object RepositorioTreinoria {
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun obterGymIdEfetivo(): String? {
+        val p = cachePerfil
+        return p?.assignedGymId?.takeIf { it.isNotBlank() }
+            ?: p?.assignedTrainerId?.takeIf { it.isNotBlank() }
+            ?: obterUserIdAtual()
     }
 
     private fun semAcento(texto: String): String {
@@ -753,12 +770,6 @@ object RepositorioTreinoria {
             Você é o "TreinorIA Coach", Personal Trainer e Fisiologista do Exercício de elite.
             O atleta acabou de abrir o treino do dia: "$tituloTreino".
             Analise TODAS AS INFORMAÇÕES DO ATLETA abaixo (Perfil, Mapa de Fadiga Muscular, Medidas Corporais, Hidratação de hoje, Refeições, Dados do Smartwatch Health Connect, Últimas Sessões e Histórico de Cargas/PRs por Exercício) e também o que ele relatou agora sobre alimentação pré-treino, aeróbico/cardio, energia/sono ou pedidos de troca de aparelho.
-
-            REGRAS DE ADAPTAÇÃO DO TREINO:
-            - Sempre considere o histórico real de cargas, mapa de fadiga, medidas, sono e nutrição do atleta abaixo.
-            - Se ele estiver bem alimentado e descansado, sugira progressão gradual de carga (+1kg a +2.5kg) ou +1-2 repetições nos exercícios em que ele já domina a carga anterior.
-            - Se ele relatar que comeu pouco, está em jejum, dormiu mal ou já fez aeróbico intenso antes da musculação, ajuste o ritmo: reduza ligeiramente a carga (-5% a -10%) ou ajuste séries/repetições e descanso para evitar falha precoce.
-            - Se ele pedir para incluir, trocar ou remover algum exercício (ou relatar dor articular/aparelho ocupado), atualize a lista `adjusted_blocks` usando EXCLUSIVAMENTE `exercise_id` válidos do CATÁLOGO DE EXERCÍCIOS DISPONÍVEIS abaixo.
 
             $dossieCompleto
 
@@ -1509,9 +1520,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Lista a galeria de fotos de evolução corporal (`gym.progress_photos`).
-     */
     suspend fun listarFotosProgresso(forcarAtualizacao: Boolean = false): List<FotoProgressoDto> = withContext(Dispatchers.IO) {
         validarSessaoECacheDoDia()
         if (!forcarAtualizacao && cacheFotosProgresso.isNotEmpty()) return@withContext cacheFotosProgresso
@@ -1532,9 +1540,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Envia foto do Shape para o bucket `gym-images` (`<uid>/progress/...`) e salva em `gym.progress_photos`.
-     */
     suspend fun enviarESalvarFotoProgresso(
         bitmap: Bitmap,
         categoria: String,
@@ -1580,10 +1585,6 @@ object RepositorioTreinoria {
         }
     }
 
-    /**
-     * Compara duas fotos do Shape (Antes vs. Depois) com o Gemini 2.5 Vision,
-     * idêntico ao `compareShapePhotosWithGemini` da Web!
-     */
     suspend fun compararFotosAntesDepoisComIa(
         context: Context?,
         fotoAntes: FotoProgressoDto,
@@ -1674,6 +1675,257 @@ object RepositorioTreinoria {
             muscleHighlights = "Boa resposta hipertrófica em tronco e membros.",
             nextFocusTip = "Continue registrando fotos mensais sob a mesma iluminação e bata sua meta diária de proteína."
         )
+    }
+
+    // =========================================================================
+    // GESTÃO DE SERVIÇOS DA ACADEMIA, PLANOS DE MATRÍCULA & CONTRATAÇÕES/AGENDAMENTOS
+    // =========================================================================
+    suspend fun listarServicosAcademia(forcarAtualizacao: Boolean = false): List<ServicoAcademiaDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheServicosAcademia.isNotEmpty()) return@withContext cacheServicosAcademia
+
+        val gymId = obterGymIdEfetivo() ?: return@withContext cacheServicosAcademia
+        try {
+            var lista = ClienteSupabase.client.from("gym_services")
+                .select {
+                    filter { eq("gym_id", gymId) }
+                    order("created_at", Order.ASCENDING)
+                }
+                .decodeList<ServicoAcademiaDto>()
+
+            if (lista.isEmpty()) {
+                val padrao = listOf(
+                    Triple("Avaliação Física & Antropometria", "Avaliação & Saúde", 60.0),
+                    Triple("Bioimpedância Tetrapolar 3D", "Avaliação & Saúde", 90.0),
+                    Triple("Aulas Coletivas (Spinning / Funcional / FitDance)", "Modalidades & Aulas", 79.9),
+                    Triple("Artes Marciais (Muay Thai / Jiu-Jitsu / Boxe)", "Modalidades & Aulas", 99.9),
+                    Triple("Consultoria Nutricional Esportiva", "Nutrição & Performance", 150.0)
+                )
+                padrao.forEach { (nome, cat, preco) ->
+                    try {
+                        val obj = buildJsonObject {
+                            put("gym_id", gymId)
+                            put("name", nome)
+                            put("category", cat)
+                            put("description", "Serviço oficial disponibilizado na unidade da academia.")
+                            put("price_brl", preco)
+                            put("duration_minutes", 40)
+                            put("schedule_info", "Seg a Sex • 08h às 20h")
+                            put(
+                                "included_in_plans",
+                                buildJsonArray {
+                                    add(JsonPrimitive("Plano Gold Trimestral"))
+                                    add(JsonPrimitive("Plano Black VIP Anual"))
+                                }
+                            )
+                        }
+                        ClienteSupabase.client.from("gym_services").insert(obj)
+                    } catch (_: Exception) {}
+                }
+                lista = ClienteSupabase.client.from("gym_services")
+                    .select {
+                        filter { eq("gym_id", gymId) }
+                        order("created_at", Order.ASCENDING)
+                    }
+                    .decodeList<ServicoAcademiaDto>()
+            }
+            cacheServicosAcademia = lista
+            lista
+        } catch (_: Exception) {
+            cacheServicosAcademia
+        }
+    }
+
+    suspend fun criarServicoAcademia(
+        nome: String,
+        categoria: String,
+        descricao: String,
+        precoBrl: Double,
+        duracaoMinutos: Int,
+        horarioAtendimento: String,
+        planosContemplados: List<String>
+    ): Boolean = withContext(Dispatchers.IO) {
+        val gymId = obterGymIdEfetivo() ?: return@withContext false
+        try {
+            val payload = buildJsonObject {
+                put("gym_id", gymId)
+                put("name", nome.trim())
+                put("category", categoria.trim().ifBlank { "Avaliação & Saúde" })
+                put("description", descricao.trim())
+                put("price_brl", precoBrl)
+                put("duration_minutes", duracaoMinutos.coerceAtLeast(15))
+                put("schedule_info", horarioAtendimento.trim().ifBlank { "Seg a Sex • 08h às 20h" })
+                put(
+                    "included_in_plans",
+                    buildJsonArray {
+                        planosContemplados.forEach { add(JsonPrimitive(it)) }
+                    }
+                )
+            }
+            ClienteSupabase.client.from("gym_services").insert(payload)
+            listarServicosAcademia(forcarAtualizacao = true)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun listarPlanosAcademia(forcarAtualizacao: Boolean = false): List<PlanoMatriculaAcademiaDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cachePlanosAcademia.isNotEmpty()) return@withContext cachePlanosAcademia
+
+        val gymId = obterGymIdEfetivo() ?: return@withContext cachePlanosAcademia
+        try {
+            var lista = ClienteSupabase.client.from("gym_membership_plans")
+                .select {
+                    filter { eq("gym_id", gymId) }
+                    order("price_brl", Order.ASCENDING)
+                }
+                .decodeList<PlanoMatriculaAcademiaDto>()
+
+            if (lista.isEmpty()) {
+                val padrao = listOf(
+                    Triple("Plano Smart Mensal", "Mensal", 109.90),
+                    Triple("Plano Gold Trimestral", "Trimestral", 139.90),
+                    Triple("Plano Black VIP Anual", "Anual", 179.90)
+                )
+                padrao.forEachIndexed { idx, (nome, ciclo, preco) ->
+                    try {
+                        val obj = buildJsonObject {
+                            put("gym_id", gymId)
+                            put("name", nome)
+                            put("billing_cycle", ciclo)
+                            put("price_brl", preco)
+                            put("description", "Musculação Livre + App TreinorIA PRO + Serviços Contemplados.")
+                            put(
+                                "perks",
+                                buildJsonArray {
+                                    add(JsonPrimitive("Musculação & Cárdio Livre"))
+                                    add(JsonPrimitive("App TreinorIA PRO Incluso"))
+                                    if (idx >= 1) add(JsonPrimitive("Bioimpedância & Aulas Coletivas Inclusas"))
+                                    if (idx >= 2) add(JsonPrimitive("Muay Thai / Lutas & Consulta Nutricional Inclusas"))
+                                }
+                            )
+                            put(
+                                "included_service_names",
+                                buildJsonArray {
+                                    add(JsonPrimitive("Avaliação Física & Antropometria"))
+                                    if (idx >= 1) {
+                                        add(JsonPrimitive("Bioimpedância Tetrapolar 3D"))
+                                        add(JsonPrimitive("Aulas Coletivas (Spinning / Funcional / FitDance)"))
+                                    }
+                                    if (idx >= 2) {
+                                        add(JsonPrimitive("Artes Marciais (Muay Thai / Jiu-Jitsu / Boxe)"))
+                                        add(JsonPrimitive("Consultoria Nutricional Esportiva"))
+                                    }
+                                }
+                            )
+                            put("is_highlighted", idx >= 1)
+                        }
+                        ClienteSupabase.client.from("gym_membership_plans").insert(obj)
+                    } catch (_: Exception) {}
+                }
+                lista = ClienteSupabase.client.from("gym_membership_plans")
+                    .select {
+                        filter { eq("gym_id", gymId) }
+                        order("price_brl", Order.ASCENDING)
+                    }
+                    .decodeList<PlanoMatriculaAcademiaDto>()
+            }
+            cachePlanosAcademia = lista
+            lista
+        } catch (_: Exception) {
+            cachePlanosAcademia
+        }
+    }
+
+    suspend fun criarPlanoMatriculaAcademia(
+        nome: String,
+        ciclo: String,
+        mensalidadeBrl: Double,
+        beneficios: List<String>,
+        servicosContemplados: List<String>
+    ): Boolean = withContext(Dispatchers.IO) {
+        val gymId = obterGymIdEfetivo() ?: return@withContext false
+        try {
+            val payload = buildJsonObject {
+                put("gym_id", gymId)
+                put("name", nome.trim())
+                put("billing_cycle", ciclo.trim().ifBlank { "Mensal" })
+                put("price_brl", mensalidadeBrl)
+                put(
+                    "perks",
+                    buildJsonArray { beneficios.forEach { add(JsonPrimitive(it)) } }
+                )
+                put(
+                    "included_service_names",
+                    buildJsonArray { servicosContemplados.forEach { add(JsonPrimitive(it)) } }
+                )
+                put("is_highlighted", true)
+            }
+            ClienteSupabase.client.from("gym_membership_plans").insert(payload)
+            listarPlanosAcademia(forcarAtualizacao = true)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun listarAgendamentosServicosAcademia(forcarAtualizacao: Boolean = false): List<AgendamentoServicoAcademiaDto> = withContext(Dispatchers.IO) {
+        validarSessaoECacheDoDia()
+        if (!forcarAtualizacao && cacheAgendamentosAcademia.isNotEmpty()) return@withContext cacheAgendamentosAcademia
+
+        val gymId = obterGymIdEfetivo() ?: return@withContext cacheAgendamentosAcademia
+        try {
+            val lista = ClienteSupabase.client.from("gym_service_bookings")
+                .select {
+                    filter { eq("gym_id", gymId) }
+                    order("created_at", Order.DESCENDING)
+                    limit(40)
+                }
+                .decodeList<AgendamentoServicoAcademiaDto>()
+            cacheAgendamentosAcademia = lista
+            lista
+        } catch (_: Exception) {
+            cacheAgendamentosAcademia
+        }
+    }
+
+    suspend fun registrarAgendamentoOuContratacaoServico(
+        servico: ServicoAcademiaDto,
+        nomeAluno: String,
+        whatsappAluno: String,
+        planoMatriculaAluno: String,
+        contempladoNaMatricula: Boolean,
+        dataPreferida: String,
+        horarioPreferido: String,
+        observacoes: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        val gymId = servico.gymId.ifBlank { obterGymIdEfetivo() ?: return@withContext false }
+        val uid = obterUserIdAtual()
+        val valorCobrado = if (contempladoNaMatricula) 0.0 else servico.priceBrl
+        try {
+            val payload = buildJsonObject {
+                put("gym_id", gymId)
+                put("service_id", servico.id)
+                put("service_name", servico.name)
+                if (!uid.isNullOrBlank()) put("student_user_id", uid)
+                put("student_name", nomeAluno.trim().ifBlank { cachePerfil?.name ?: "Aluno" })
+                if (whatsappAluno.isNotBlank()) put("student_whatsapp", whatsappAluno.trim())
+                put("student_plan_name", planoMatriculaAluno.trim().ifBlank { "Plano Gold Trimestral" })
+                put("booking_type", if (contempladoNaMatricula) "included_in_plan" else "paid_extra")
+                put("price_charged_brl", valorCobrado)
+                put("preferred_date", dataPreferida.ifBlank { obterDataHojeIso() })
+                put("preferred_time", horarioPreferido.ifBlank { "18:00" })
+                put("status", "confirmed")
+                if (observacoes.isNotBlank()) put("notes", observacoes.trim())
+            }
+            ClienteSupabase.client.from("gym_service_bookings").insert(payload)
+            listarAgendamentosServicosAcademia(forcarAtualizacao = true)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     suspend fun listarAlunosPersonal(forcarAtualizacao: Boolean = false): List<VinculoAlunoPersonalDto> = withContext(Dispatchers.IO) {
