@@ -111,36 +111,25 @@ fun TelaTreinoAtivo(
     val contexto = LocalContext.current
     val escopo = rememberCoroutineScope()
 
-    var fichaAtual by remember { mutableStateOf(fichaSelecionada) }
+    var fichaAtual by remember {
+        mutableStateOf(fichaSelecionada ?: GerenciadorTreinoAtivoSessao.fichaAtivaObj)
+    }
     var perfil by remember { mutableStateOf<PerfilDto?>(RepositorioTreinoria.cachePerfil) }
     var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(RepositorioTreinoria.cacheExercicios) }
     var estatisticasExercicios by remember {
         mutableStateOf<Map<String, EstatisticaExercicioHistorico>>(RepositorioTreinoria.cacheEstatisticasExercicios)
     }
 
-    var segundosTreino by remember { mutableStateOf(0) }
-    var treinoEmAndamento by remember { mutableStateOf(true) }
+    // Referências diretas ao Singleton GerenciadorTreinoAtivoSessao para NUNCA perder dados ao trocar de aba!
+    val seriesEstado = GerenciadorTreinoAtivoSessao.seriesEstado
+    val exerciciosExpandidosIds = GerenciadorTreinoAtivoSessao.exerciciosExpandidosIds
+    val mensagensChatPreTreino = GerenciadorTreinoAtivoSessao.mensagensChatPreTreino
 
-    // =========================================================================
-    // CONTROLE DE EXPANSÃO / COMPRESSÃO DE SÉRIES POR EXERCÍCIO (Modo Foco!)
-    // Por padrão, abre apenas o 1º exercício (o que está sendo executado)
-    // e avança automaticamente para o próximo quando todas as séries dele terminam!
-    // =========================================================================
-    var modoFocoApenasUmExpandido by remember { mutableStateOf(true) }
-    val exerciciosExpandidosIds = remember { mutableStateListOf<String>() }
-
-    // Check-in Pré-Treino com Personal IA
-    var exibirCheckinPreTreinoModal by remember { mutableStateOf(true) }
-    var jaMostrouBoasVindasCheckin by remember { mutableStateOf(false) }
-    val mensagensChatPreTreino = remember { mutableStateListOf<MensagemChatIa>() }
     var chipRefeicaoEscolhido by remember { mutableStateOf("") }
     var chipCardioEscolhido by remember { mutableStateOf("") }
     var chipEnergiaEscolhido by remember { mutableStateOf("") }
     var textoLivreCheckin by remember { mutableStateOf("") }
     var consultandoCheckinIa by remember { mutableStateOf(false) }
-    var propostaAjusteIa by remember { mutableStateOf<RespostaCheckinPreTreinoIa?>(null) }
-    var resumoIaAplicadoBanner by remember { mutableStateOf<String?>(null) }
-    var prontidaoIaAplicada by remember { mutableStateOf<Int?>(null) }
 
     // Modal de Conclusão do Treino
     var exibirModalConcluirTreino by remember { mutableStateOf(false) }
@@ -203,11 +192,6 @@ fun TelaTreinoAtivo(
     var descansoTotalTelaInteira by remember { mutableStateOf(90) }
     var descansoRestanteTelaInteira by remember { mutableStateOf(0) }
 
-    var descansoBarraRapida by remember { mutableStateOf(0) }
-    var exercicioDescansoBarra by remember { mutableStateOf("") }
-
-    val seriesEstado = remember { mutableStateListOf<SerieEditavel>() }
-
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(contexto) {
         var instanciaTts: TextToSpeech? = null
@@ -231,14 +215,11 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // Função auxiliar: quando uma série é concluída, se todas as séries daquele exercício
-    // tiverem sido concluídas e o Modo Foco estiver ativo, comprime o exercício concluído
-    // e expande automaticamente o próximo exercício pendente!
     val verificarAutoAvancoExercicio = { exIdConcluido: String ->
         val todasDesteConcluidas = seriesEstado
             .filter { it.exerciseId == exIdConcluido }
             .all { it.completed }
-        if (todasDesteConcluidas && modoFocoApenasUmExpandido) {
+        if (todasDesteConcluidas && GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) {
             val proximoPendenteId = seriesEstado.firstOrNull { !it.completed }?.exerciseId
             exerciciosExpandidosIds.clear()
             if (proximoPendenteId != null) {
@@ -252,7 +233,7 @@ fun TelaTreinoAtivo(
         if (jaExpandido) {
             exerciciosExpandidosIds.remove(exId)
         } else {
-            if (modoFocoApenasUmExpandido) {
+            if (GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) {
                 exerciciosExpandidosIds.clear()
             }
             exerciciosExpandidosIds.add(exId)
@@ -267,7 +248,8 @@ fun TelaTreinoAtivo(
         val lista = RepositorioTreinoria.listarFichasTreino()
         val sessoes = RepositorioTreinoria.listarSessoesRecentes(10)
         if (fichaAtual == null && lista.isNotEmpty()) {
-            fichaAtual = RepositorioTreinoria.selecionarTreinoDoDia(lista, sessoes)
+            fichaAtual = GerenciadorTreinoAtivoSessao.fichaAtivaObj
+                ?: RepositorioTreinoria.selecionarTreinoDoDia(lista, sessoes)
         } else if (fichaAtual != null) {
             val atualizada = lista.find { it.id == fichaAtual?.id }
             if (atualizada != null) fichaAtual = atualizada
@@ -276,8 +258,8 @@ fun TelaTreinoAtivo(
 
     LaunchedEffect(fichaAtual?.name, perfil?.name) {
         val nomeTreino = fichaAtual?.name ?: return@LaunchedEffect
-        if (!jaMostrouBoasVindasCheckin) {
-            jaMostrouBoasVindasCheckin = true
+        if (!GerenciadorTreinoAtivoSessao.jaMostrouBoasVindasCheckin) {
+            GerenciadorTreinoAtivoSessao.jaMostrouBoasVindasCheckin = true
             val primeiroNome = perfil?.name?.split(" ")?.firstOrNull() ?: "Atleta"
             mensagensChatPreTreino.clear()
             mensagensChatPreTreino.add(
@@ -294,11 +276,15 @@ fun TelaTreinoAtivo(
         }
     }
 
+    // Inicializa as séries na memória SOMENTE se ainda não houver treino ativo para esta ficha!
     LaunchedEffect(fichaAtual?.id, fichaAtual?.items?.size, estatisticasExercicios.size) {
         val f = fichaAtual ?: return@LaunchedEffect
-        if (seriesEstado.isNotEmpty() && seriesEstado.firstOrNull()?.exerciseId == f.items.firstOrNull()?.exerciseId) {
+        // Se já existe um treino em andamento para esta mesma ficha, preserva TODAS as séries e edições!
+        if (seriesEstado.isNotEmpty() && GerenciadorTreinoAtivoSessao.fichaAtivaId == f.id) {
             return@LaunchedEffect
         }
+        GerenciadorTreinoAtivoSessao.fichaAtivaId = f.id
+        GerenciadorTreinoAtivoSessao.fichaAtivaObj = f
         seriesEstado.clear()
         f.items.forEach { item ->
             val nomeEx = item.exercise?.name ?: "Exercício"
@@ -339,24 +325,34 @@ fun TelaTreinoAtivo(
                 )
             }
         }
-        // Expande automaticamente apenas o 1º exercício ao iniciar o treino!
         exerciciosExpandidosIds.clear()
         seriesEstado.firstOrNull()?.exerciseId?.let { exerciciosExpandidosIds.add(it) }
     }
 
-    LaunchedEffect(treinoEmAndamento) {
-        while (treinoEmAndamento) {
+    // Cronômetro persistente (mesmo trocando de aba, compensa o tempo decorrido!)
+    LaunchedEffect(Unit) {
+        val agora = System.currentTimeMillis()
+        if (GerenciadorTreinoAtivoSessao.ultimoTickTimestampMs > 0L) {
+            val deltaSeg = ((agora - GerenciadorTreinoAtivoSessao.ultimoTickTimestampMs) / 1000L).toInt().coerceIn(0, 7200)
+            GerenciadorTreinoAtivoSessao.segundosTreino += deltaSeg
+        }
+        GerenciadorTreinoAtivoSessao.ultimoTickTimestampMs = agora
+        while (true) {
             delay(1000)
-            segundosTreino++
+            GerenciadorTreinoAtivoSessao.segundosTreino++
+            GerenciadorTreinoAtivoSessao.ultimoTickTimestampMs = System.currentTimeMillis()
         }
     }
 
-    LaunchedEffect(descansoBarraRapida) {
-        if (descansoBarraRapida > 0) {
+    LaunchedEffect(GerenciadorTreinoAtivoSessao.descansoBarraRapida) {
+        if (GerenciadorTreinoAtivoSessao.descansoBarraRapida > 0) {
             delay(1000)
-            descansoBarraRapida--
-            if (descansoBarraRapida == 0) {
-                GerenciadorNotificacoes.notificarFimDescanso(contexto, exercicioDescansoBarra)
+            GerenciadorTreinoAtivoSessao.descansoBarraRapida--
+            if (GerenciadorTreinoAtivoSessao.descansoBarraRapida == 0) {
+                GerenciadorNotificacoes.notificarFimDescanso(
+                    contexto,
+                    GerenciadorTreinoAtivoSessao.exercicioDescansoBarra
+                )
                 falar("Fim do descanso! Pronto para a próxima série.")
             }
         }
@@ -390,7 +386,6 @@ fun TelaTreinoAtivo(
         listaPrs
     }
 
-    // Modal de Câmera Ao Vivo com IA + Interação por Áudio
     if (indiceSerieCameraAoVivoIa != null) {
         val idxCam = indiceSerieCameraAoVivoIa!!
         val serieCam = seriesEstado.getOrNull(idxCam)
@@ -418,13 +413,13 @@ fun TelaTreinoAtivo(
                         )
                     }
                     verificarAutoAvancoExercicio(serieCam.exerciseId)
-                    exercicioDescansoBarra = serieCam.exerciseName
-                    descansoBarraRapida = serieCam.restSeconds
+                    GerenciadorTreinoAtivoSessao.exercicioDescansoBarra = serieCam.exerciseName
+                    GerenciadorTreinoAtivoSessao.descansoBarraRapida = serieCam.restSeconds
                 },
                 aoAvancarParaProximaSerie = if (proxIdx != null) {
                     {
                         val proxExId = seriesEstado.getOrNull(proxIdx)?.exerciseId
-                        if (proxExId != null && modoFocoApenasUmExpandido) {
+                        if (proxExId != null && GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) {
                             exerciciosExpandidosIds.clear()
                             exerciciosExpandidosIds.add(proxExId)
                         }
@@ -439,7 +434,7 @@ fun TelaTreinoAtivo(
 
     // Modal de Conclusão do Treino
     if (exibirModalConcluirTreino) {
-        val duracaoMin = (segundosTreino / 60).coerceAtLeast(1)
+        val duracaoMin = (GerenciadorTreinoAtivoSessao.segundosTreino / 60).coerceAtLeast(1)
         val qtdSeriesEfetivas = if (totalConcluidas > 0) totalConcluidas else seriesEstado.size
 
         Dialog(
@@ -770,19 +765,19 @@ fun TelaTreinoAtivo(
                                     val sessao = RepositorioTreinoria.salvarSessaoTreinoConcluida(
                                         planId = fichaAtual?.id,
                                         titulo = fichaAtual?.name ?: "Sessão de Treino",
-                                        duracaoSegundos = segundosTreino.coerceAtLeast(60),
+                                        duracaoSegundos = GerenciadorTreinoAtivoSessao.segundosTreino.coerceAtLeast(60),
                                         feeling = feelingEscolhido,
                                         notas = notasSessao,
                                         fotoUrl = urlFoto,
-                                        resumoConselhoIa = resumoIaAplicadoBanner,
-                                        prontidaoIa = prontidaoIaAplicada,
+                                        resumoConselhoIa = GerenciadorTreinoAtivoSessao.resumoIaAplicadoBanner,
+                                        prontidaoIa = GerenciadorTreinoAtivoSessao.prontidaoIaAplicada,
                                         seriesConcluidas = concluidas
                                     )
 
                                     val gravouHealth = GerenciadorHealthConnect.gravarTreinoConcluido(
                                         context = contexto,
                                         tituloTreino = fichaAtual?.name ?: "Treino de Musculação",
-                                        duracaoSegundos = segundosTreino.coerceAtLeast(60),
+                                        duracaoSegundos = GerenciadorTreinoAtivoSessao.segundosTreino.coerceAtLeast(60),
                                         volumeTotalKg = sessao?.totalVolumeKg ?: volumeAtual,
                                         notas = notasSessao
                                     )
@@ -821,6 +816,7 @@ fun TelaTreinoAtivo(
                                     }
                                     delay(900)
                                     exibirModalConcluirTreino = false
+                                    GerenciadorTreinoAtivoSessao.resetarTreinoAtivo()
                                     aoConcluirTreino()
                                 }
                             },
@@ -845,9 +841,9 @@ fun TelaTreinoAtivo(
     }
 
     // Modal de Check-in Pré-Treino com Personal IA
-    if (exibirCheckinPreTreinoModal) {
+    if (GerenciadorTreinoAtivoSessao.exibirCheckinPreTreinoModal) {
         Dialog(
-            onDismissRequest = { exibirCheckinPreTreinoModal = false },
+            onDismissRequest = { GerenciadorTreinoAtivoSessao.exibirCheckinPreTreinoModal = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Surface(
@@ -896,7 +892,7 @@ fun TelaTreinoAtivo(
                                 )
                             }
                         }
-                        TextButton(onClick = { exibirCheckinPreTreinoModal = false }) {
+                        TextButton(onClick = { GerenciadorTreinoAtivoSessao.exibirCheckinPreTreinoModal = false }) {
                             Text("Pular ✕", fontWeight = FontWeight.Bold, color = TextoSecundario)
                         }
                     }
@@ -1037,8 +1033,8 @@ fun TelaTreinoAtivo(
                             }
                         }
 
-                        if (propostaAjusteIa != null) {
-                            val prop = propostaAjusteIa!!
+                        if (GerenciadorTreinoAtivoSessao.propostaAjusteIa != null) {
+                            val prop = GerenciadorTreinoAtivoSessao.propostaAjusteIa!!
                             item {
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),
@@ -1153,9 +1149,9 @@ fun TelaTreinoAtivo(
                                                 }
                                                 exerciciosExpandidosIds.clear()
                                                 seriesEstado.firstOrNull()?.exerciseId?.let { exerciciosExpandidosIds.add(it) }
-                                                resumoIaAplicadoBanner = "✨ ${prop.workoutSummaryAdvice} (Prontidão ${prop.readinessScore}%)"
-                                                prontidaoIaAplicada = prop.readinessScore
-                                                exibirCheckinPreTreinoModal = false
+                                                GerenciadorTreinoAtivoSessao.resumoIaAplicadoBanner = "✨ ${prop.workoutSummaryAdvice} (Prontidão ${prop.readinessScore}%)"
+                                                GerenciadorTreinoAtivoSessao.prontidaoIaAplicada = prop.readinessScore
+                                                GerenciadorTreinoAtivoSessao.exibirCheckinPreTreinoModal = false
                                             },
                                             shape = RoundedCornerShape(12.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
@@ -1243,7 +1239,7 @@ fun TelaTreinoAtivo(
                                         mensagemAtleta = msgFinal
                                     )
                                     mensagensChatPreTreino.add(MensagemChatIa("assistant", resp.replyMessage))
-                                    propostaAjusteIa = resp
+                                    GerenciadorTreinoAtivoSessao.propostaAjusteIa = resp
                                     consultandoCheckinIa = false
                                 }
                             },
@@ -1390,7 +1386,7 @@ fun TelaTreinoAtivo(
                                                 )
                                             )
                                         }
-                                        if (modoFocoApenasUmExpandido) exerciciosExpandidosIds.clear()
+                                        if (GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) exerciciosExpandidosIds.clear()
                                         exerciciosExpandidosIds.add(ex.id)
                                         exibirAdicionarExercicioModal = false
                                     }
@@ -1713,11 +1709,7 @@ fun TelaTreinoAtivo(
                         exibirConfirmacaoDescartar = false
                         indiceSerieTelaInteira = null
                         indiceSerieCameraAoVivoIa = null
-                        descansoBarraRapida = 0
-                        segundosTreino = 0
-                        seriesEstado.indices.forEach { i ->
-                            seriesEstado[i] = seriesEstado[i].copy(completed = false)
-                        }
+                        GerenciadorTreinoAtivoSessao.resetarTreinoAtivo()
                         aoConcluirTreino()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = VermelhoAlerta)
@@ -1736,7 +1728,7 @@ fun TelaTreinoAtivo(
     val iniciarSerieEmTelaInteira = { idxSerie: Int ->
         val serie = seriesEstado.getOrNull(idxSerie)
         if (serie != null) {
-            if (modoFocoApenasUmExpandido) {
+            if (GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) {
                 exerciciosExpandidosIds.clear()
                 exerciciosExpandidosIds.add(serie.exerciseId)
             }
@@ -1809,7 +1801,6 @@ fun TelaTreinoAtivo(
         }
     }
 
-    // TELA INTEIRA DE CONTAGEM E DESCANSO + CONTROLE DE MÍDIA INTEGRADO
     if (indiceSerieTelaInteira != null) {
         val idxAtual = indiceSerieTelaInteira!!
         val serieAtual = seriesEstado.getOrNull(idxAtual)
@@ -2081,7 +2072,7 @@ fun TelaTreinoAtivo(
                                 color = VerdeEsmeralda
                             )
                             Text(
-                                text = "⏱️ ${segundosTreino / 60}m ${segundosTreino % 60}s • $totalConcluidas/${seriesEstado.size} séries • ${volumeAtual.toInt()} kg",
+                                text = "⏱️ ${GerenciadorTreinoAtivoSessao.segundosTreino / 60}m ${GerenciadorTreinoAtivoSessao.segundosTreino % 60}s • $totalConcluidas/${seriesEstado.size} séries • ${volumeAtual.toInt()} kg",
                                 fontSize = 12.sp,
                                 color = TextoSecundario
                             )
@@ -2093,7 +2084,7 @@ fun TelaTreinoAtivo(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilledTonalButton(
-                            onClick = { exibirCheckinPreTreinoModal = true },
+                            onClick = { GerenciadorTreinoAtivoSessao.exibirCheckinPreTreinoModal = true },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                             modifier = Modifier.weight(1f)
                         ) {
@@ -2132,10 +2123,11 @@ fun TelaTreinoAtivo(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         FilterChip(
-                            selected = modoFocoApenasUmExpandido,
+                            selected = GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido,
                             onClick = {
-                                modoFocoApenasUmExpandido = !modoFocoApenasUmExpandido
-                                if (modoFocoApenasUmExpandido) {
+                                GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido =
+                                    !GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido
+                                if (GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) {
                                     val emExecucaoId = seriesEstado.firstOrNull { !it.completed }?.exerciseId
                                         ?: seriesEstado.firstOrNull()?.exerciseId
                                     exerciciosExpandidosIds.clear()
@@ -2144,7 +2136,7 @@ fun TelaTreinoAtivo(
                             },
                             label = {
                                 Text(
-                                    if (modoFocoApenasUmExpandido) "🎯 Foco: 1 Exercício por Vez" else "🎯 Foco (1 por vez)",
+                                    if (GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido) "🎯 Foco: 1 Exercício por Vez" else "🎯 Foco (1 por vez)",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Black
                                 )
@@ -2154,7 +2146,7 @@ fun TelaTreinoAtivo(
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             TextButton(
                                 onClick = {
-                                    modoFocoApenasUmExpandido = false
+                                    GerenciadorTreinoAtivoSessao.modoFocoApenasUmExpandido = false
                                     exerciciosExpandidosIds.clear()
                                     seriesAgrupadas.keys.forEach { exerciciosExpandidosIds.add(it.first) }
                                 },
@@ -2173,14 +2165,14 @@ fun TelaTreinoAtivo(
                         }
                     }
 
-                    if (resumoIaAplicadoBanner != null) {
+                    if (GerenciadorTreinoAtivoSessao.resumoIaAplicadoBanner != null) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = VerdeEsmeralda.copy(alpha = 0.16f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = resumoIaAplicadoBanner!!,
+                                text = GerenciadorTreinoAtivoSessao.resumoIaAplicadoBanner!!,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = VerdeEsmeraldaClaro,
@@ -2199,15 +2191,15 @@ fun TelaTreinoAtivo(
                             Icon(
                                 Icons.Default.Timer,
                                 contentDescription = null,
-                                tint = if (descansoBarraRapida > 0) AmbarDestaque else TextoSecundario,
+                                tint = if (GerenciadorTreinoAtivoSessao.descansoBarraRapida > 0) AmbarDestaque else TextoSecundario,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (descansoBarraRapida > 0) "Descanso: ${descansoBarraRapida}s" else "Descanso:",
+                                text = if (GerenciadorTreinoAtivoSessao.descansoBarraRapida > 0) "Descanso: ${GerenciadorTreinoAtivoSessao.descansoBarraRapida}s" else "Descanso:",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (descansoBarraRapida > 0) AmbarDestaque else TextoSecundario
+                                color = if (GerenciadorTreinoAtivoSessao.descansoBarraRapida > 0) AmbarDestaque else TextoSecundario
                             )
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2216,8 +2208,8 @@ fun TelaTreinoAtivo(
                                     shape = RoundedCornerShape(8.dp),
                                     color = SuperficieElevada,
                                     modifier = Modifier.clickable {
-                                        exercicioDescansoBarra = "Próxima Série"
-                                        descansoBarraRapida = seg
+                                        GerenciadorTreinoAtivoSessao.exercicioDescansoBarra = "Próxima Série"
+                                        GerenciadorTreinoAtivoSessao.descansoBarraRapida = seg
                                     }
                                 ) {
                                     Text(
@@ -2229,11 +2221,11 @@ fun TelaTreinoAtivo(
                                     )
                                 }
                             }
-                            if (descansoBarraRapida > 0) {
+                            if (GerenciadorTreinoAtivoSessao.descansoBarraRapida > 0) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = VermelhoAlerta.copy(alpha = 0.2f),
-                                    modifier = Modifier.clickable { descansoBarraRapida = 0 }
+                                    modifier = Modifier.clickable { GerenciadorTreinoAtivoSessao.descansoBarraRapida = 0 }
                                 ) {
                                     Text(
                                         text = "Zerar",
@@ -2387,7 +2379,6 @@ fun TelaTreinoAtivo(
                         // CONTEÚDO EXPANSÍVEL DO EXERCÍCIO (Botões de Ação + Lista de Séries)
                         AnimatedVisibility(visible = estaExpandido) {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                // Barra de Ações do Exercício: [📹 Câmera IA] [🎬 Vídeo] [🔄 Trocar] [🧮 Anilhas]
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -2715,8 +2706,8 @@ fun TelaTreinoAtivo(
                                                                     seriesEstado[idxGlobal] = serie.copy(completed = novoStatus)
                                                                     if (novoStatus) {
                                                                         verificarAutoAvancoExercicio(serie.exerciseId)
-                                                                        exercicioDescansoBarra = serie.exerciseName
-                                                                        descansoBarraRapida = serie.restSeconds
+                                                                        GerenciadorTreinoAtivoSessao.exercicioDescansoBarra = serie.exerciseName
+                                                                        GerenciadorTreinoAtivoSessao.descansoBarraRapida = serie.restSeconds
                                                                     }
                                                                 }
                                                             }

@@ -3,6 +3,11 @@ package br.com.raevan.treinoria.dados.repositorios
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import br.com.raevan.treinoria.apresentacao.treino.SerieEditavel
 import br.com.raevan.treinoria.dados.rede.ClienteSupabase
 import br.com.raevan.treinoria.dados.remoto.dto.*
 import br.com.raevan.treinoria.dados.sessao.GerenciadorSessao
@@ -105,6 +110,47 @@ data class FichaGeradaPorIa(
     val items: List<BlocoExercicioAjustadoIa>
 )
 
+/**
+ * Gerenciador Singleton do Estado do Treino Ativo!
+ * Mantém TODAS as séries marcadas, cargas alteradas, cronômetro do treino, check-in IA
+ * e exercícios expandidos salvos em memória mesmo quando o usuário troca de aba
+ * na barra inferior (Início, Desempenho, Nutri & Corpo, Treino)!
+ */
+object GerenciadorTreinoAtivoSessao {
+    var fichaAtivaId: String? by mutableStateOf(null)
+    var fichaAtivaObj: FichaTreinoDto? by mutableStateOf(null)
+    val seriesEstado = mutableStateListOf<SerieEditavel>()
+    val exerciciosExpandidosIds = mutableStateListOf<String>()
+    var modoFocoApenasUmExpandido: Boolean by mutableStateOf(true)
+    var segundosTreino: Int by mutableStateOf(0)
+    var ultimoTickTimestampMs: Long by mutableStateOf(0L)
+    var exibirCheckinPreTreinoModal: Boolean by mutableStateOf(true)
+    var jaMostrouBoasVindasCheckin: Boolean by mutableStateOf(false)
+    val mensagensChatPreTreino = mutableStateListOf<MensagemChatIa>()
+    var propostaAjusteIa: RespostaCheckinPreTreinoIa? by mutableStateOf(null)
+    var resumoIaAplicadoBanner: String? by mutableStateOf(null)
+    var prontidaoIaAplicada: Int? by mutableStateOf(null)
+    var descansoBarraRapida: Int by mutableStateOf(0)
+    var exercicioDescansoBarra: String by mutableStateOf("")
+
+    fun resetarTreinoAtivo() {
+        fichaAtivaId = null
+        fichaAtivaObj = null
+        seriesEstado.clear()
+        exerciciosExpandidosIds.clear()
+        segundosTreino = 0
+        ultimoTickTimestampMs = 0L
+        exibirCheckinPreTreinoModal = true
+        jaMostrouBoasVindasCheckin = false
+        mensagensChatPreTreino.clear()
+        propostaAjusteIa = null
+        resumoIaAplicadoBanner = null
+        prontidaoIaAplicada = null
+        descansoBarraRapida = 0
+        exercicioDescansoBarra = ""
+    }
+}
+
 object RepositorioTreinoria {
 
     @Volatile var cacheUserId: String? = null
@@ -126,7 +172,6 @@ object RepositorioTreinoria {
     @Volatile var cacheBitmapsPorUrl: MutableMap<String, Bitmap> = mutableMapOf()
     @Volatile var cacheAlunosPersonal: List<VinculoAlunoPersonalDto> = emptyList()
 
-    // Cache de Serviços da Academia, Planos de Matrícula e Agendamentos
     @Volatile var cacheServicosAcademia: List<ServicoAcademiaDto> = emptyList()
     @Volatile var cachePlanosAcademia: List<PlanoMatriculaAcademiaDto> = emptyList()
     @Volatile var cacheAgendamentosAcademia: List<AgendamentoServicoAcademiaDto> = emptyList()
@@ -152,6 +197,7 @@ object RepositorioTreinoria {
         cacheServicosAcademia = emptyList()
         cachePlanosAcademia = emptyList()
         cacheAgendamentosAcademia = emptyList()
+        GerenciadorTreinoAtivoSessao.resetarTreinoAtivo()
     }
 
     private fun validarSessaoECacheDoDia() {
@@ -1678,7 +1724,7 @@ object RepositorioTreinoria {
     }
 
     // =========================================================================
-    // GESTÃO DE SERVIÇOS DA ACADEMIA, PLANOS DE MATRÍCULA & CONTRATAÇÕES/AGENDAMENTOS
+    // GESTÃO COMPLETA DE SERVIÇOS DA ACADEMIA (TURMAS, LIMITE DE PESSOAS, DIAS E HORÁRIOS)
     // =========================================================================
     suspend fun listarServicosAcademia(forcarAtualizacao: Boolean = false): List<ServicoAcademiaDto> = withContext(Dispatchers.IO) {
         validarSessaoECacheDoDia()
@@ -1695,11 +1741,11 @@ object RepositorioTreinoria {
 
             if (lista.isEmpty()) {
                 val padrao = listOf(
+                    Triple("Pilates de Aparelhos & Solo", "Modalidades & Aulas", 80.0),
                     Triple("Avaliação Física & Antropometria", "Avaliação & Saúde", 60.0),
                     Triple("Bioimpedância Tetrapolar 3D", "Avaliação & Saúde", 90.0),
                     Triple("Aulas Coletivas (Spinning / Funcional / FitDance)", "Modalidades & Aulas", 79.9),
-                    Triple("Artes Marciais (Muay Thai / Jiu-Jitsu / Boxe)", "Modalidades & Aulas", 99.9),
-                    Triple("Consultoria Nutricional Esportiva", "Nutrição & Performance", 150.0)
+                    Triple("Artes Marciais (Muay Thai / Jiu-Jitsu / Boxe)", "Modalidades & Aulas", 99.9)
                 )
                 padrao.forEach { (nome, cat, preco) ->
                     try {
@@ -1707,10 +1753,24 @@ object RepositorioTreinoria {
                             put("gym_id", gymId)
                             put("name", nome)
                             put("category", cat)
-                            put("description", "Serviço oficial disponibilizado na unidade da academia.")
+                            put("description", "Serviço oficial com turmas e horários programados.")
                             put("price_brl", preco)
-                            put("duration_minutes", 40)
-                            put("schedule_info", "Seg a Sex • 08h às 20h")
+                            put("duration_minutes", 45)
+                            put("max_students_per_class", 12)
+                            put(
+                                "weekdays",
+                                buildJsonArray {
+                                    listOf("Segunda", "Terça", "Quarta", "Quinta", "Sexta").forEach { add(JsonPrimitive(it)) }
+                                }
+                            )
+                            put("slots_per_day", 4)
+                            put(
+                                "time_slots",
+                                buildJsonArray {
+                                    listOf("07:00", "09:00", "18:00", "19:00").forEach { add(JsonPrimitive(it)) }
+                                }
+                            )
+                            put("schedule_info", "Seg a Sex • 4 turmas/dia (45 min • Máx 12 alunos)")
                             put(
                                 "included_in_plans",
                                 buildJsonArray {
@@ -1742,19 +1802,36 @@ object RepositorioTreinoria {
         descricao: String,
         precoBrl: Double,
         duracaoMinutos: Int,
-        horarioAtendimento: String,
+        maxAlunosTurma: Int,
+        diasSemana: List<String>,
+        qtdHorariosDia: Int,
+        horariosLista: List<String>,
         planosContemplados: List<String>
     ): Boolean = withContext(Dispatchers.IO) {
         val gymId = obterGymIdEfetivo() ?: return@withContext false
         try {
+            val dias = diasSemana.ifEmpty { listOf("Segunda", "Quarta", "Sexta") }
+            val horarios = horariosLista.ifEmpty { listOf("07:00", "09:00", "18:00", "19:00") }
+            val resumoAgenda = "${dias.joinToString(", ")} • ${horarios.size} horários/dia (${horarios.joinToString(", ")}) • ${duracaoMinutos} min • Máx $maxAlunosTurma alunos/turma"
+
             val payload = buildJsonObject {
                 put("gym_id", gymId)
                 put("name", nome.trim())
-                put("category", categoria.trim().ifBlank { "Avaliação & Saúde" })
+                put("category", categoria.trim().ifBlank { "Modalidades & Aulas" })
                 put("description", descricao.trim())
                 put("price_brl", precoBrl)
-                put("duration_minutes", duracaoMinutos.coerceAtLeast(15))
-                put("schedule_info", horarioAtendimento.trim().ifBlank { "Seg a Sex • 08h às 20h" })
+                put("duration_minutes", duracaoMinutos.coerceAtLeast(10))
+                put("max_students_per_class", maxAlunosTurma.coerceAtLeast(1))
+                put(
+                    "weekdays",
+                    buildJsonArray { dias.forEach { add(JsonPrimitive(it)) } }
+                )
+                put("slots_per_day", qtdHorariosDia.coerceAtLeast(1))
+                put(
+                    "time_slots",
+                    buildJsonArray { horarios.forEach { add(JsonPrimitive(it)) } }
+                )
+                put("schedule_info", resumoAgenda)
                 put(
                     "included_in_plans",
                     buildJsonArray {
@@ -1796,13 +1873,15 @@ object RepositorioTreinoria {
                             put("name", nome)
                             put("billing_cycle", ciclo)
                             put("price_brl", preco)
+                            put("fidelity_months", if (idx == 0) 0 else if (idx == 1) 3 else 12)
+                            put("guest_passes_per_month", if (idx == 0) 0 else if (idx == 1) 2 else 5)
                             put("description", "Musculação Livre + App TreinorIA PRO + Serviços Contemplados.")
                             put(
                                 "perks",
                                 buildJsonArray {
                                     add(JsonPrimitive("Musculação & Cárdio Livre"))
                                     add(JsonPrimitive("App TreinorIA PRO Incluso"))
-                                    if (idx >= 1) add(JsonPrimitive("Bioimpedância & Aulas Coletivas Inclusas"))
+                                    if (idx >= 1) add(JsonPrimitive("Pilates, Bioimpedância & Aulas Coletivas Inclusas"))
                                     if (idx >= 2) add(JsonPrimitive("Muay Thai / Lutas & Consulta Nutricional Inclusas"))
                                 }
                             )
@@ -1811,12 +1890,12 @@ object RepositorioTreinoria {
                                 buildJsonArray {
                                     add(JsonPrimitive("Avaliação Física & Antropometria"))
                                     if (idx >= 1) {
+                                        add(JsonPrimitive("Pilates de Aparelhos & Solo"))
                                         add(JsonPrimitive("Bioimpedância Tetrapolar 3D"))
                                         add(JsonPrimitive("Aulas Coletivas (Spinning / Funcional / FitDance)"))
                                     }
                                     if (idx >= 2) {
                                         add(JsonPrimitive("Artes Marciais (Muay Thai / Jiu-Jitsu / Boxe)"))
-                                        add(JsonPrimitive("Consultoria Nutricional Esportiva"))
                                     }
                                 }
                             )
@@ -1843,6 +1922,8 @@ object RepositorioTreinoria {
         nome: String,
         ciclo: String,
         mensalidadeBrl: Double,
+        fidelidadeMeses: Int,
+        convidadosPorMes: Int,
         beneficios: List<String>,
         servicosContemplados: List<String>
     ): Boolean = withContext(Dispatchers.IO) {
@@ -1853,6 +1934,8 @@ object RepositorioTreinoria {
                 put("name", nome.trim())
                 put("billing_cycle", ciclo.trim().ifBlank { "Mensal" })
                 put("price_brl", mensalidadeBrl)
+                put("fidelity_months", fidelidadeMeses.coerceAtLeast(0))
+                put("guest_passes_per_month", convidadosPorMes.coerceAtLeast(0))
                 put(
                     "perks",
                     buildJsonArray { beneficios.forEach { add(JsonPrimitive(it)) } }
@@ -1881,7 +1964,7 @@ object RepositorioTreinoria {
                 .select {
                     filter { eq("gym_id", gymId) }
                     order("created_at", Order.DESCENDING)
-                    limit(40)
+                    limit(60)
                 }
                 .decodeList<AgendamentoServicoAcademiaDto>()
             cacheAgendamentosAcademia = lista
@@ -1897,6 +1980,7 @@ object RepositorioTreinoria {
         whatsappAluno: String,
         planoMatriculaAluno: String,
         contempladoNaMatricula: Boolean,
+        diaSemanaPreferido: String,
         dataPreferida: String,
         horarioPreferido: String,
         observacoes: String
@@ -1915,6 +1999,7 @@ object RepositorioTreinoria {
                 put("student_plan_name", planoMatriculaAluno.trim().ifBlank { "Plano Gold Trimestral" })
                 put("booking_type", if (contempladoNaMatricula) "included_in_plan" else "paid_extra")
                 put("price_charged_brl", valorCobrado)
+                put("preferred_day_of_week", diaSemanaPreferido.ifBlank { "Segunda" })
                 put("preferred_date", dataPreferida.ifBlank { obterDataHojeIso() })
                 put("preferred_time", horarioPreferido.ifBlank { "18:00" })
                 put("status", "confirmed")
