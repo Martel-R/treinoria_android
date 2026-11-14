@@ -222,6 +222,34 @@ object RepositorioTreinoria {
         return LocalDate.now(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd/MM"))
     }
 
+    fun filtrarSessoesRegistradasHoje(sessoes: List<SessaoTreinoDto>): List<SessaoTreinoDto> {
+        val hojeLocal = LocalDate.now(ZoneId.systemDefault())
+        val hojeIso = hojeLocal.toString()
+        return sessoes.filter { s ->
+            val raw = (s.finishedAt ?: s.startedAt).trim()
+            if (raw.isEmpty()) return@filter false
+            try {
+                val dtLocal = OffsetDateTime.parse(raw)
+                    .atZoneSameInstant(ZoneId.systemDefault())
+                    .toLocalDate()
+                dtLocal == hojeLocal
+            } catch (_: Exception) {
+                raw.take(10) == hojeIso
+            }
+        }
+    }
+
+    fun formatarHorarioSessaoBr(isoTimestamp: String?): String {
+        if (isoTimestamp.isNullOrBlank()) return ""
+        return try {
+            OffsetDateTime.parse(isoTimestamp)
+                .atZoneSameInstant(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("HH:mm"))
+        } catch (_: Exception) {
+            if (isoTimestamp.length >= 16) isoTimestamp.substring(11, 16) else ""
+        }
+    }
+
     fun obterUserIdAtual(): String? {
         return try {
             ClienteSupabase.client.auth.currentUserOrNull()?.id

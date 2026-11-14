@@ -45,6 +45,7 @@ import br.com.raevan.treinoria.dados.remoto.dto.ExercicioDto
 import br.com.raevan.treinoria.dados.remoto.dto.FichaTreinoDto
 import br.com.raevan.treinoria.dados.remoto.dto.PerfilDto
 import br.com.raevan.treinoria.dados.remoto.dto.SerieSessaoDto
+import br.com.raevan.treinoria.dados.remoto.dto.SessaoTreinoDto
 import br.com.raevan.treinoria.dados.repositorios.*
 import br.com.raevan.treinoria.nucleo.componentes.BarraControleMidiaTelaCheia
 import br.com.raevan.treinoria.nucleo.componentes.DialogoCameraAoVivoCoachIa
@@ -119,6 +120,12 @@ fun TelaTreinoAtivo(
     var catalogoExercicios by remember { mutableStateOf<List<ExercicioDto>>(RepositorioTreinoria.cacheExercicios) }
     var estatisticasExercicios by remember {
         mutableStateOf<Map<String, EstatisticaExercicioHistorico>>(RepositorioTreinoria.cacheEstatisticasExercicios)
+    }
+    var sessoesRecentes by remember {
+        mutableStateOf<List<SessaoTreinoDto>>(RepositorioTreinoria.cacheSessoes)
+    }
+    val sessoesRegistradasHoje = remember(sessoesRecentes) {
+        RepositorioTreinoria.filtrarSessoesRegistradasHoje(sessoesRecentes)
     }
 
     // Referências diretas ao Singleton GerenciadorTreinoAtivoSessao para NUNCA perder dados ao trocar de aba!
@@ -251,7 +258,8 @@ fun TelaTreinoAtivo(
         catalogoExercicios = RepositorioTreinoria.listarExercicios()
         estatisticasExercicios = RepositorioTreinoria.obterEstatisticasExercicios()
         val lista = RepositorioTreinoria.listarFichasTreino()
-        val sessoes = RepositorioTreinoria.listarSessoesRecentes(10)
+        val sessoes = RepositorioTreinoria.listarSessoesRecentes(15, forcarAtualizacao = true)
+        sessoesRecentes = sessoes
         if (fichaAtual == null && lista.isNotEmpty()) {
             fichaAtual = GerenciadorTreinoAtivoSessao.fichaAtivaObj
                 ?: RepositorioTreinoria.selecionarTreinoDoDia(lista, sessoes)
@@ -793,6 +801,7 @@ fun TelaTreinoAtivo(
                                         prontidaoIa = GerenciadorTreinoAtivoSessao.prontidaoIaAplicada,
                                         seriesConcluidas = concluidas
                                     )
+                                    sessoesRecentes = RepositorioTreinoria.cacheSessoes
 
                                     val gravouHealth = GerenciadorHealthConnect.gravarTreinoConcluido(
                                         context = contexto,
@@ -2066,6 +2075,70 @@ fun TelaTreinoAtivo(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(vertical = 14.dp)
     ) {
+        if (sessoesRegistradasHoje.isNotEmpty()) {
+            item {
+                val ultimaHoje = sessoesRegistradasHoje.first()
+                val horarioHoje = RepositorioTreinoria.formatarHorarioSessaoBr(
+                    ultimaHoje.finishedAt ?: ultimaHoje.startedAt
+                )
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = AmbarDestaque.copy(alpha = 0.16f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.5.dp, AmbarDestaque.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(AmbarDestaque.copy(alpha = 0.25f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = AmbarDestaque,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = if (sessoesRegistradasHoje.size == 1)
+                                    "⚠️ VOCÊ JÁ REGISTROU UM TREINO HOJE!"
+                                else
+                                    "⚠️ VOCÊ JÁ REGISTROU ${sessoesRegistradasHoje.size} TREINOS HOJE!",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                color = AmbarDestaque
+                            )
+                            Text(
+                                text = "${ultimaHoje.title}${if (horarioHoje.isNotBlank()) " às $horarioHoje" else ""} • ${ultimaHoje.durationMinutes ?: 45} min • ${ultimaHoje.totalVolumeKg.toInt()} kg",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextoPrimario
+                            )
+                            Text(
+                                text = "Humor registrado: ${ultimaHoje.feeling ?: "Ótimo"} • Caso queira fazer um 2º treino extra hoje, pode prosseguir normalmente.",
+                                fontSize = 11.sp,
+                                color = TextoSecundario
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         item {
             Surface(
                 shape = RoundedCornerShape(18.dp),
