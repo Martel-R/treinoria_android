@@ -48,6 +48,7 @@ import br.com.raevan.treinoria.dados.remoto.dto.SerieSessaoDto
 import br.com.raevan.treinoria.dados.repositorios.*
 import br.com.raevan.treinoria.nucleo.componentes.BarraControleMidiaTelaCheia
 import br.com.raevan.treinoria.nucleo.componentes.DialogoCameraAoVivoCoachIa
+import br.com.raevan.treinoria.nucleo.componentes.DialogoVerificacaoHumorPosTreino
 import br.com.raevan.treinoria.nucleo.componentes.GeradorCardTreinoStories
 import br.com.raevan.treinoria.nucleo.componentes.PlayerVideoNativoCard
 import br.com.raevan.treinoria.nucleo.componentes.ResumoExercicioCard
@@ -132,6 +133,7 @@ fun TelaTreinoAtivo(
     var consultandoCheckinIa by remember { mutableStateOf(false) }
 
     // Modal de Conclusão do Treino
+    var exibirModalHumorPosTreino by remember { mutableStateOf(false) }
     var exibirModalConcluirTreino by remember { mutableStateOf(false) }
     var feelingEscolhido by remember { mutableStateOf("Ótimo") }
     var notasSessao by remember { mutableStateOf("") }
@@ -225,6 +227,9 @@ fun TelaTreinoAtivo(
             if (proximoPendenteId != null) {
                 exerciciosExpandidosIds.add(proximoPendenteId)
             }
+        }
+        if (seriesEstado.isNotEmpty() && seriesEstado.all { it.completed }) {
+            exibirModalHumorPosTreino = true
         }
     }
 
@@ -430,6 +435,21 @@ fun TelaTreinoAtivo(
                 aoFechar = { indiceSerieCameraAoVivoIa = null }
             )
         }
+    }
+
+    if (exibirModalHumorPosTreino) {
+        val cal = java.util.Calendar.getInstance()
+        val diaIdx = (cal.get(java.util.Calendar.DAY_OF_WEEK) - 1).coerceIn(0, 6)
+        DialogoVerificacaoHumorPosTreino(
+            checkinsNaSemana = 1,
+            diaSemanaAtualIdx = diaIdx,
+            aoConcluirVerificacao = { feelingFormatado ->
+                feelingEscolhido = feelingFormatado
+                exibirModalHumorPosTreino = false
+                exibirModalConcluirTreino = true
+            },
+            aoFechar = { exibirModalHumorPosTreino = false }
+        )
     }
 
     // Modal de Conclusão do Treino
@@ -2020,7 +2040,7 @@ fun TelaTreinoAtivo(
                                         Button(
                                             onClick = {
                                                 indiceSerieTelaInteira = null
-                                                exibirModalConcluirTreino = true
+                                                exibirModalHumorPosTreino = true
                                             },
                                             shape = RoundedCornerShape(18.dp),
                                             colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
@@ -2104,7 +2124,7 @@ fun TelaTreinoAtivo(
                         }
 
                         Button(
-                            onClick = { exibirModalConcluirTreino = true },
+                            onClick = { exibirModalHumorPosTreino = true },
                             colors = ButtonDefaults.buttonColors(containerColor = VerdeEsmeralda),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                             modifier = Modifier.weight(1f)
